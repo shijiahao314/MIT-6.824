@@ -5,9 +5,17 @@ import (
 	"strings"
 )
 
+func makeEmptyLog() Log {
+	log := Log{
+		Entries: make([]Entry, 0),
+		Index0:  0,
+	}
+	return log
+}
+
 type Log struct {
 	Entries []Entry
-	Index0  int // Entries[0].Index, default 0
+	Index0  int // Entries[0].Index, default 0 if not exists
 }
 
 type Entry struct {
@@ -23,61 +31,105 @@ func (l *Log) append(entries ...Entry) {
 
 func (l *Log) setEntries(entries []Entry) {
 	l.Entries = entries
-	l.Index0 = l.Entries[0].Index
-}
-
-func makeEmptyLog() Log {
-	log := Log{
-		Entries: make([]Entry, 0),
-		Index0:  0,
+	if len(l.Entries) > 0 {
+		l.Index0 = l.Entries[0].Index
+	} else {
+		l.Index0 = 0
 	}
-	return log
 }
 
-func (l *Log) at(idx int) *Entry {
-	// idx表示 Index为idx 的 Entry
+// return Entry{-1, 0, 0} if not exists
+// get entry where entry.Index == index
+func (l *Log) get(index int) *Entry {
+	// index表示Index为index的Entry，下同
 	// idx - Index0 = 在Entries数组中的下标
-	// 下同
-	// return where Entry.Index == idx
-	if idx-l.Index0 < 0 || idx-l.Index0 > l.len()-1 {
+	if len(l.Entries) == 0 || index-l.Index0 < 0 || index-l.Index0 >= len(l.Entries) {
 		return &Entry{
 			Term:    -1,
 			Index:   0,
 			Command: 0,
 		}
 	}
-	return &l.Entries[idx-l.Index0]
+	return &l.Entries[index-l.Index0]
 }
 
-func (l *Log) truncate(idx int) {
-	l.Entries = l.Entries[:idx-l.Index0]
-}
-
-func (l *Log) slice(idx int) []Entry {
-	if len(l.Entries) <= idx-l.Index0 {
+// return nil if out of range
+// return l.Entries[:index-l.Index0]
+func (l *Log) before(index int) []Entry {
+	if index-l.Index0 < 0 || index-l.Index0 >= len(l.Entries) {
 		return nil
 	}
-	return l.Entries[idx-l.Index0:]
+	return l.Entries[:index-l.Index0]
+}
+
+// do nothing if out of range
+// l.Entries = l.Entries[:index-l.Index0]
+func (l *Log) truncateBefore(index int) {
+	if index-l.Index0 <= 0 || index-l.Index0 > l.len() {
+		return
+	}
+	l.Entries = l.Entries[:index-l.Index0]
+}
+
+// return nil if out of range
+// return l.Entries[index-l.Index0:]
+func (l *Log) after(index int) []Entry {
+	if index-l.Index0 < 0 || index-l.Index0 >= len(l.Entries) {
+		return nil
+	}
+	return l.Entries[index-l.Index0:]
+}
+
+// do nothing if out of range
+// l.Entries = l.Entries[index-l.Index0:]
+func (l *Log) truncateAfter(index int) {
+	if index-l.Index0 < 0 || index-l.Index0 >= l.len() {
+		return
+	}
+	l.Entries = l.Entries[index-l.Index0:]
+	// set l.Index0
+	l.Index0 = l.Entries[0].Index
+}
+
+// return nil if left >= right || left-l.Index0 < 0 || right-l.Index0 >= len(l.Entries)
+// return l.Entries[left-l.Index0 : right-l.Index0]
+func (l *Log) between(left, right int) []Entry {
+	if left >= right || left-l.Index0 < 0 || right-l.Index0 > len(l.Entries) {
+		return nil
+	}
+	return l.Entries[left-l.Index0 : right-l.Index0]
+}
+
+// do nothing if out of range
+// l.Entries = l.Entries[left-l.Index0 : right-l.Index0]
+func (l *Log) truncateBetween(left, right int) {
+	if left >= right || left-l.Index0 < 0 || right-l.Index0 > len(l.Entries) {
+		return
+	}
+	l.Entries = l.Entries[left-l.Index0 : right-l.Index0]
+	// set l.Index0
+	l.Index0 = l.Entries[0].Index
 }
 
 func (l *Log) len() int {
 	return len(l.Entries)
 }
 
-func (l *Log) lastLog() *Entry {
-	if l.len() <= 0 {
-		return &Entry{
+// TODO return what? if len(l.Entries) == 0
+func (l *Log) lastLog() Entry {
+	if len(l.Entries) <= 0 {
+		return Entry{
 			Term:    -1,
 			Index:   0,
 			Command: 0,
 		}
 	}
-	return &l.Entries[l.len()-1]
+	return l.Entries[len(l.Entries)-1]
 }
 
-func (e *Entry) String() string {
-	return fmt.Sprint(e.Term)
-}
+// func (e *Entry) String() string {
+// 	return fmt.Sprint(e.Term)
+// }
 
 func (l *Log) String() string {
 	nums := []string{}

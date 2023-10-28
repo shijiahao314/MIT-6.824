@@ -222,6 +222,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	}
 
 	for m := range applyCh {
+		fmt.Printf("receive m=%v\n", m)
 		err_msg := ""
 		if m.SnapshotValid {
 			cfg.mu.Lock()
@@ -577,16 +578,18 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				}
 			}
 		}
-
 		if index != -1 {
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				fmt.Printf("index=[%d], [%d / %d]\n", index, nd, expectedServers)
 				if nd > 0 && nd >= expectedServers {
+					fmt.Printf("444\n")
 					// committed
 					if cmd1 == cmd {
+						fmt.Printf("cmd=%v is what we submitted\n", cmd1)
 						// and it was the command we submitted.
 						return index
 					}

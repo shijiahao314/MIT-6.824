@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const MSG_CHAN_BUFFER_SIZE = 10
+const MSG_CHAN_BUFFER_SIZE = 0
 
 var printMsgChan chan string
 
@@ -88,7 +88,7 @@ func (logger *Logger) Info(format string, v ...any) {
 		// 使用传递和使用参数要使用v...
 		content := fmt.Sprintf("[%5s] %s"+format,
 			append([]interface{}{logLevelName[InfoLevel], logger.getPrefix()}, v...)...)
-		msg := InfoFormat + content
+		msg := fmt.Sprintf(InfoFormat, content)
 		logger.msgChan <- msg
 	}
 }
@@ -97,7 +97,7 @@ func (logger *Logger) Warn(format string, v ...any) {
 	if logger.logLevel >= WarnLevel {
 		content := fmt.Sprintf("[%5s] %s"+format,
 			append([]interface{}{logLevelName[WarnLevel], logger.getPrefix()}, v...)...)
-		msg := WarnFormat + content
+		msg := fmt.Sprintf(WarnFormat, content)
 		logger.msgChan <- msg
 	}
 }

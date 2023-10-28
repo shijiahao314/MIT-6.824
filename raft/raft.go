@@ -66,7 +66,7 @@ const (
 const (
 	heartbeatInterval   = 50 * time.Millisecond // 心跳间隔
 	heartbeatTimeoutMin = 150
-	heartbeatTimeoutMax = 300
+	heartbeatTimeoutMax = 500
 )
 
 // A Go object implementing a single Raft peer.
@@ -77,10 +77,6 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	// Your data here (2A, 2B, 2C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-
 	// 日志
 	logger debugutils.Logger
 
@@ -88,8 +84,6 @@ type Raft struct {
 	currentTerm int // latest term server has seen (initialized to 0 on first boot, increases monotonically)
 	votedFor    int // candidateId that received vote in current term (or null if none)
 	log         Log // log entries; each entry contains command for state machine, and term when entry was received by leader (first index is 1)
-
-	// TODO: log Log
 
 	// 选举相关
 	state         State
@@ -108,9 +102,9 @@ type Raft struct {
 	applyCh   chan ApplyMsg
 	applyCond *sync.Cond
 
-	// snapshot
-	lastIncludedIndex int
-	lastIncludedTerm  int
+	// snapshot, also persistent state on all servers
+	lastIncludedIndex int // index of snapshot (initialized to 0)
+	lastIncludedTerm  int // term of snapshot (initialized to -1)
 }
 
 func (rf *Raft) setNewTerm(term int) {
@@ -146,26 +140,29 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist(snapshot []byte) {
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
-	// raftstate
+	if snapshot == nil {
+		rf.logger.Info("rf.persist(): save raftstate")
+	} else {
+		rf.logger.Info("rf.persist(): save raftstate and snapshot")
+	}
+	// encode raftstate
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
-	//
 	e.Encode(rf.lastIncludedIndex)
 	e.Encode(rf.lastIncludedTerm)
 	raftstate := w.Bytes()
 	// save raftstate and snapshot
-	rf.logger.Info("rf.persister.Save")
 	rf.persister.Save(raftstate, snapshot)
 }
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+	// read raftstate from rf.persister
+	rf.logger.Info("rf.readPersist(): read raftstate")
+	if data == nil || len(data) < 1 {
 		return
 	}
 	r := bytes.NewBuffer(data)
@@ -173,21 +170,28 @@ func (rf *Raft) readPersist(data []byte) {
 	var currentTerm int
 	var votedFor int
 	var log Log
+	var lastIncludedIndex int
+	var lastIncludeTerm int
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&log) != nil {
-		rf.logger.Error("failed to read persist")
+		d.Decode(&log) != nil ||
+		d.Decode(&lastIncludedIndex) != nil ||
+		d.Decode(&lastIncludeTerm) != nil {
+		rf.logger.Error("rf.readPersist(): failed to read raftstate")
 	} else {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = log
+		rf.lastIncludedIndex = lastIncludedIndex
+		rf.lastIncludedTerm = lastIncludeTerm
 	}
 }
 
 // 进行同步
 func (rf *Raft) apply() {
 	// 唤醒所有applyCond.Wait()的goroutine
-	rf.logger.Info("Broadcast")
+	rf.logger.Info("rf.apply(): rf.applyCond.Broadcast(), rf.commitIndex=[%d]", rf.commitIndex)
+	// rf.applyCond.Broadcast()获得rf.mu
 	rf.applyCond.Broadcast()
 }
 
@@ -195,25 +199,23 @@ func (rf *Raft) apply() {
 func (rf *Raft) applier() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
 	for !rf.killed() {
-		if rf.commitIndex > rf.lastApplied && rf.log.lastLog().Index > rf.lastApplied {
-			rf.logger.Info("if true: rf.commitIndex=[%d], rf.lastApplied=[%d], rf.log.lastLog().Index=[%d]",
-				rf.commitIndex, rf.lastApplied, rf.log.lastLog().Index)
+		if rf.lastApplied < rf.commitIndex && rf.lastApplied < rf.log.lastLog().Index {
 			rf.lastApplied++
 			applyMsg := ApplyMsg{
 				CommandValid: true,
-				Command:      rf.log.at(rf.lastApplied).Command,
+				Command:      rf.log.get(rf.lastApplied).Command,
 				CommandIndex: rf.lastApplied,
 			}
-			rf.logger.Info("After apply, lastApplied=[%d], rf.log=%v", rf.lastApplied, rf.log)
+			rf.logger.Info(" -> [Client], want to apply command %v", applyMsg)
 			rf.mu.Unlock()
-			// applyCh是无缓冲的，需要释放锁
 			rf.applyCh <- applyMsg
 			rf.mu.Lock()
+			rf.logger.Info("apply command success")
 		} else {
-			rf.logger.Info("rf.commitIndex=[%d], rf.lastApplied=[%d], rf.log.lastLog().Index=[%d]",
-				rf.commitIndex, rf.lastApplied, rf.log.lastLog().Index)
+			rf.logger.Info("rf.applyCond.Wait(), rf.commitIndex=[%d], rf.lastApplied=[%d]",
+				rf.commitIndex, rf.lastApplied)
+			// rf.applyCond.Wait()释放rf.mu
 			rf.applyCond.Wait()
 		}
 	}
@@ -232,7 +234,8 @@ func (rf *Raft) applier() {
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	// If command received from client: append entry to local log, respond after entry applied to state machine
+	// If command received from client: append entry to local log,
+	// respond after entry applied to state machine
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	index := -1
@@ -242,15 +245,17 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		// not leader
 		return index, term, isLeader
 	}
-	index = rf.log.lastLog().Index + 1
+	index = rf.nextIndex[rf.me]
 	rf.log.append(Entry{
 		Term:    rf.currentTerm,
 		Index:   index,
 		Command: command,
 	})
+	rf.nextIndex[rf.me] = index + 1
+	rf.matchIndex[rf.me] = index
 	rf.persist(nil)
 	rf.logger.Info("<- [Client], receive command %d", command)
-	rf.logger.Info("After receive, rf.log=%v", rf.log)
+	rf.logger.Info("after receive, rf.log=%v", rf.log)
 	return index, term, isLeader
 }
 
@@ -282,12 +287,14 @@ func (rf *Raft) ticker() {
 		time.Sleep(heartbeatInterval)
 		rf.mu.Lock()
 		if rf.state == Leader {
-			rf.appendEntries(true)
-		}
-		// heartbeatTimeout: heartbeatTimeoutMin ~ heartbeatTimeoutMax ms
-		if time.Now().After(rf.leaderTimeout) {
-			// 超时选举
-			rf.leaderElection()
+			go rf.leaderCheckSendAppendEntries(true)
+		} else {
+			// not leader
+			// heartbeatTimeout: heartbeatTimeoutMin ~ heartbeatTimeoutMax ms
+			if time.Now().After(rf.leaderTimeout) {
+				// 超时选举
+				go rf.leaderElection()
+			}
 		}
 		rf.mu.Unlock()
 	}
@@ -333,7 +340,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastIncludedTerm = -1
 
 	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
+	rf.readPersist(rf.persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()

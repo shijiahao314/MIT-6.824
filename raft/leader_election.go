@@ -38,7 +38,9 @@ func (rf *Raft) candidateRequestVote(server int, args *RequestVoteArgs, voteCoun
 		}
 		// Upon election: send initial empty AppendEntries RPCs (heartbeat) to each server;
 		// repeat during idle periods to prevent election timeouts
-		rf.appendEntries(true)
+		rf.mu.Unlock()
+		go rf.leaderCheckSendAppendEntries(true)
+		rf.mu.Lock()
 		// 为什么不使用 go rf.appendEntries(true) 提高并发？
 		// 会导致提前释放rf.mu，增加心跳乱序可能性
 	}
