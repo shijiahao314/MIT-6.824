@@ -13,7 +13,7 @@ type AppendEntriesReply struct {
 	Term    int  // currentTerm, for leader to update itself
 	Success bool // true if follower contained entry matching prevLogIndex and prevLogTerm
 	// In practice, we doubt this optimization is necessary,
-	// since failures happen infrequently and
+	// since failures hppen infrequently and
 	// it is unlikely that there will be many inconsistent entries.
 	Conflict bool
 	XTerm    int // term in the conflicting entry (if any)
@@ -49,33 +49,39 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if len(args.Entries) != 0 {
 		rf.logger.Error("rf.log.lastLog().Index=[%d], args.PrevLogIndex=[%d]", rf.log.lastLog().Index, args.PrevLogIndex)
 	}
-
-	// 考虑rf.log为空的情况
-	if rf.log.lastLog().Index < args.PrevLogIndex {
-		reply.Conflict = true
-		reply.XTerm = -1
-		reply.XIndex = -1
-		reply.XLen = rf.log.len()
-		rf.logger.Info("[%v]: Conflict1 XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
-		return
-	}
-	if rf.log.get(args.PrevLogIndex).Term != args.PrevLogTerm {
-		rf.logger.Warn("args.PrevLogIndex=%d, args.PrevLogTerm=%d", args.PrevLogIndex, args.PrevLogTerm)
-		rf.logger.Warn("rf.log=%v", rf.log)
-		rf.logger.Warn("rf.log.get(args.PrevLogIndex).Term=%d", rf.log.get(args.PrevLogIndex).Term)
-		rf.logger.Warn("args.PrevLogTerm=%d", args.PrevLogTerm)
-		reply.Conflict = true
-		xTerm := rf.log.get(args.PrevLogIndex).Term
-		for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
-			if rf.log.get(xIndex-1).Term != xTerm {
-				reply.XIndex = xIndex
-				break
-			}
+	// leader认为server已经有包含PrecLogIndex及之前的日志项
+	// 因此leader发送的args.Entry只有PrecLogIndex之后的的日志项
+	// 若server存在没有PrecLogIndex及之前的日志项，则矛盾
+	if rf.lastIncludedIndex < args.PrevLogIndex {
+		if rf.log.lastLog().Index < args.PrevLogIndex {
+			// server不包含PrevLogIndex
+			reply.Conflict = true
+			reply.XTerm = -1
+			reply.XIndex = -1
+			reply.XLen = rf.lastApplied + 1
+			rf.logger.Info("[%v]: Conflict1 XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
+			return
 		}
-		reply.XTerm = xTerm
-		reply.XLen = rf.log.len()
-		rf.logger.Info("Conflict2 XTerm %v, XIndex %v, XLen %v", reply.XTerm, reply.XIndex, reply.XLen)
-		return
+		if rf.log.get(args.PrevLogIndex).Term != args.PrevLogTerm {
+			// server有PrevLogIndex，但是Term不一致
+			rf.logger.Warn("args.PrevLogIndex=%d, args.PrevLogTerm=%d", args.PrevLogIndex, args.PrevLogTerm)
+			rf.logger.Warn("rf.log=%v", rf.log)
+			rf.logger.Warn("rf.log.get(args.PrevLogIndex).Term=%d", rf.log.get(args.PrevLogIndex).Term)
+			rf.logger.Warn("args.PrevLogTerm=%d", args.PrevLogTerm)
+			reply.Conflict = true
+			xTerm := rf.log.get(args.PrevLogIndex).Term
+			for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
+				if rf.log.get(xIndex-1).Term != xTerm {
+					reply.XIndex = xIndex
+					break
+				}
+			}
+			reply.XTerm = xTerm
+			// reply.XLen = rf.log.len()
+			reply.XLen = rf.lastApplied + 1
+			rf.logger.Info("Conflict2 XTerm %v, XIndex %v, XLen %v", reply.XTerm, reply.XIndex, reply.XLen)
+			return
+		}
 	}
 	// 日志同步
 	for idx, entry := range args.Entries {
@@ -172,13 +178,14 @@ func (rf *Raft) leaderSendAppendEntries(server int, args *AppendEntriesArgs) {
 				rf.logger.Info("rf.matchIndex[%d]=[%d], rf.nextIndex[%d]=[%d]", server, rf.matchIndex[server], server, rf.nextIndex[server])
 			}
 		} else if reply.Conflict {
-			rf.logger.Info("[%v]: Conflict from %v %#v", rf.me, server, reply)
+			// 矛盾了
+			rf.logger.Info("Conflict from %v %#v", server, reply)
 			if reply.XTerm == -1 {
 				rf.nextIndex[server] = reply.XLen
 			} else {
 				// Leader找自己log中term为XTerm的最大Entry的Index: lastLogInXTerm
 				lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm)
-				rf.logger.Info("[%v]: lastLogInXTerm %v", rf.me, lastLogInXTerm)
+				rf.logger.Info("lastLogInXTerm %v", lastLogInXTerm)
 				if lastLogInXTerm > 0 {
 					rf.nextIndex[server] = lastLogInXTerm
 				} else {
@@ -209,7 +216,7 @@ func (rf *Raft) leaderCheckSendAppendEntries(heartbeat bool) {
 			continue
 		}
 		nextIndex := rf.nextIndex[server]
-		if nextIndex <= rf.lastIncludedIndex {
+		if rf.lastIncludedIndex >= nextIndex {
 			// 应该发送快照
 			args := InstallSnapshotArgs{
 				Term:              rf.currentTerm,
@@ -218,6 +225,7 @@ func (rf *Raft) leaderCheckSendAppendEntries(heartbeat bool) {
 				LastIncludedTerm:  rf.lastIncludedTerm,
 				Data:              rf.persister.ReadSnapshot(),
 			}
+			rf.logger.Warn("rf.persister.snapshot=%v", rf.persister.snapshot)
 			rf.logger.Info("-> [%d], leaderSendInstallSnapshot, args=%v", server, args)
 			go rf.leaderSendInstallSnapshot(server, &args)
 			// 该server处理完毕

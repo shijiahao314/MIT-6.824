@@ -1,11 +1,5 @@
 package raft
 
-import (
-	"bytes"
-
-	"6.5840lab2/labgob"
-)
-
 type InstallSnapshotArgs struct {
 	Term              int    // leader's term
 	LeaderId          int    // so follower can redirect clients
@@ -17,7 +11,9 @@ type InstallSnapshotArgs struct {
 }
 
 type InstallSnapshotReply struct {
-	Term int // currentTerm, for leader to update itself
+	Success     bool // if success
+	Term        int  // currentTerm, for leader to update itself
+	LastApplied int
 }
 
 /*
@@ -42,75 +38,64 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
+	reply.Success = false
+	reply.LastApplied = rf.lastApplied
 	rf.logger.Info("<- [%d], receive InstallSnapshot, args=%v", args.LeaderId, args)
 	if args.Term < rf.currentTerm {
 		// 1. Reply immediately if term < currentTerm
-		rf.logger.Info("-> [%d], args.Term < rf.currentTerm, reply=%v", reply)
+		rf.logger.Info("-> [%d], args.Term < rf.currentTerm, reply=%v", args.LeaderId, reply)
 		return
 	}
+	if args.Term > rf.currentTerm {
+		rf.setNewTerm(args.Term)
+	}
+	if args.LastIncludedIndex <= rf.lastIncludedIndex {
+		// 收到的快照比自己的快照旧
+		rf.logger.Info("rf.lastApplied=[%d]", rf.lastApplied)
+		rf.logger.Warn("args.LastIncludedIndex=[%d] <= rf.lastIncludedIndex=[%d]",
+			args.LastIncludedIndex, rf.lastIncludedIndex)
+		return
+	}
+	rf.lastIncludedIndex = args.LastIncludedIndex
+	rf.lastIncludedTerm = args.LastIncludedTerm
 	// 2. Create new snapshot file if first chunk (offset is 0)
 	// 3. Write data into snapshot file at given offset
-	r := bytes.NewBuffer(args.Data)
-	d := labgob.NewDecoder(r)
-	var CommandIndex int
-	var xlog []interface{}
-	if d.Decode(&CommandIndex) != nil || d.Decode(&xlog) != nil {
-		rf.logger.Error("InstallSnapshot: failed to read data")
-		return
-	}
 	// 4. Reply and wait for more data chunks if done is false
-	// 5. Save snapshot file, discard any existing or partial snapshot with a smaller index
-	// set raft state
-	rf.logger.Info("CommandIndex=%d, rf.log=%v", CommandIndex, rf.log)
-	// rf.log.setEntries(rf.log.after(CommandIndex))
-	rf.log.truncateAfter(CommandIndex)
-	rf.lastIncludedIndex = rf.log.get(CommandIndex).Index
-	rf.lastIncludedTerm = rf.log.get(CommandIndex).Term
+	// 5. Save snapshot file, discard any existing or
+	// partial snapshot with a smaller index
+
 	// 6. If existing log entry has same index and term as snapshot’s
 	// last included entry, retain log entries following it and reply
-	if rf.log.lastLog().Term == rf.lastIncludedTerm {
-		// term相同才删除该项？为什么
-		// rf.log.setEntries(rf.log.after(rf.lastIncludedIndex + 1))
-		rf.log.truncateAfter(rf.lastIncludedIndex + 1)
-		// apply
-		applyMsg := ApplyMsg{
-			SnapshotValid: true,
-			Snapshot:      args.Data,
-			SnapshotIndex: rf.lastIncludedIndex,
-			SnapshotTerm:  rf.lastIncludedTerm,
-		}
-		rf.mu.Unlock()
-		rf.logger.Info(" -> [Client], want to apply snapshot %v", applyMsg)
-		// applyCh是无缓冲的，需要释放锁
-		rf.applyCh <- applyMsg
-		rf.logger.Info("apply snapshot success1")
-		rf.mu.Lock()
-		rf.lastApplied = rf.log.lastLog().Index
-		rf.logger.Info("apply snapshot success2")
-		return
+	if rf.log.lastLog().Index <= args.LastIncludedIndex {
+		// 日志最后一项Index比收到的快照LastIncludedIndex小
+		rf.log.clean()
+	} else {
+		// 7. Discard the entire log
+		// 日志最后一项Index大于等于收到的快照LastIncludedIndex
+		rf.log.truncateAfter(args.LastIncludedIndex)
 	}
-	// 7. Discard the entire log
-	rf.log.setEntries(make([]Entry, 0))
-	// 8. Reset state machine using snapshot contents (and load
-	// snapshot’s cluster configuration)
-	rf.readPersist(rf.persister.ReadRaftState())
 	// apply
 	applyMsg := ApplyMsg{
 		SnapshotValid: true,
 		Snapshot:      args.Data,
-		SnapshotIndex: rf.lastIncludedIndex,
 		SnapshotTerm:  rf.lastIncludedTerm,
+		SnapshotIndex: rf.lastIncludedIndex,
 	}
 	rf.mu.Unlock()
-	// applyCh是无缓冲的，需要释放锁
 	rf.logger.Info(" -> [Client], want to apply snapshot %v", applyMsg)
 	// applyCh是无缓冲的，需要释放锁
 	rf.applyCh <- applyMsg
-	rf.logger.Info("apply snapshot success1")
 	rf.mu.Lock()
-	rf.lastApplied = rf.log.lastLog().Index
-	rf.logger.Info("apply snapshot success2")
-
+	rf.lastApplied = args.LastIncludedIndex
+	rf.logger.Info("apply snapshot success")
+	// 8. Reset state machine using snapshot contents (and load
+	// snapshot’s cluster configuration)
+	// rf.readPersist(rf.persister.ReadRaftState())
+	rf.logger.Info("after install snapshot, rf=%v", rf)
+	rf.logger.Info("rf.log=%v", rf.log)
+	rf.persist(args.Data)
+	reply.Success = true
+	reply.LastApplied = rf.lastApplied
 }
 
 func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
@@ -127,37 +112,46 @@ func (rf *Raft) leaderSendInstallSnapshot(server int, args *InstallSnapshotArgs)
 	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	rf.logger.Info("<- [%d]: leaderSendInstallSnapshot, rf.currentTerm=[%d], reply=%v",
+		server, rf.currentTerm, reply)
 	if reply.Term > rf.currentTerm {
 		rf.setNewTerm(reply.Term)
 		return
 	}
-}
-
-func (rf *Raft) installSnapshot() {
-	for server := range rf.peers {
-		if server == rf.me {
-			continue
-		}
-		//
-		args := InstallSnapshotArgs{
-			Term:              rf.currentTerm,
-			LeaderId:          rf.me,
-			LastIncludedIndex: rf.lastIncludedIndex,
-			LastIncludedTerm:  rf.lastIncludedTerm,
-			Data:              rf.persister.ReadSnapshot(),
-		}
-		rf.logger.Info("-> [%d], installSnapshot, args={%d, %d, %d, %d}",
-			server, args.Term, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm)
-		go rf.leaderSendInstallSnapshot(server, &args)
+	if reply.Success {
+		// 成功
+		rf.matchIndex[server] = rf.lastIncludedIndex
+		rf.nextIndex[server] = rf.lastIncludedIndex + 1
+	} else {
+		rf.matchIndex[server] = reply.LastApplied
+		rf.nextIndex[server] = reply.LastApplied + 1
 	}
 }
+
+// func (rf *Raft) installSnapshot() {
+// 	for server := range rf.peers {
+// 		if server == rf.me {
+// 			continue
+// 		}
+// 		//
+// 		args := InstallSnapshotArgs{
+// 			Term:              rf.currentTerm,
+// 			LeaderId:          rf.me,
+// 			LastIncludedIndex: rf.lastIncludedIndex,
+// 			LastIncludedTerm:  rf.lastIncludedTerm,
+// 			Data:              rf.persister.ReadSnapshot(),
+// 		}
+// 		rf.logger.Info("-> [%d], installSnapshot, args={%d, %d, %d, %d}",
+// 			server, args.Term, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm)
+// 		go rf.leaderSendInstallSnapshot(server, &args)
+// 	}
+// }
 
 // the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.logger.Info("Snapshot: index=[%d], rf.lastIncludedIndex=[%d]", index, rf.lastIncludedIndex)

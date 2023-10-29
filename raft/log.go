@@ -53,6 +53,11 @@ func (l *Log) get(index int) *Entry {
 	return &l.Entries[index-l.Index0]
 }
 
+func (l *Log) clean() {
+	l.Entries = make([]Entry, 0)
+	l.Index0 = 0
+}
+
 // return nil if out of range
 // return l.Entries[:index-l.Index0]
 func (l *Log) before(index int) []Entry {

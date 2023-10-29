@@ -155,6 +155,7 @@ func (rf *Raft) persist(snapshot []byte) {
 	e.Encode(rf.lastIncludedTerm)
 	raftstate := w.Bytes()
 	// save raftstate and snapshot
+	rf.logger.Warn("rf.persister.Save(raftstate, snapshot)")
 	rf.persister.Save(raftstate, snapshot)
 }
 
@@ -341,6 +342,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(rf.persister.ReadRaftState())
+
+	rf.commitIndex = rf.lastIncludedIndex
+	rf.lastApplied = rf.lastIncludedIndex
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
