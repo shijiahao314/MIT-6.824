@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// 默认日志等级
+const DEFAULT_LOG_LEVEL = Slient
+
+// 日志Buffer大小
 const MSG_CHAN_BUFFER_SIZE = 0
 
 var printMsgChan chan string
@@ -30,19 +34,18 @@ type LogLevel int
 // 日志等级
 const (
 	Slient = iota
-	InfoLevel
-	WarnLevel
 	ErrorLevel
+	WarnLevel
+	InfoLevel
+	DebugLevel
 )
-
-// 默认日志等级
-const DEFAULT_LOG_LEVEL = ErrorLevel
 
 var logLevelName = map[LogLevel]string{
 	Slient:     "SLIENT",
-	InfoLevel:  "INFO",
-	WarnLevel:  "WARN",
 	ErrorLevel: "ERROR",
+	WarnLevel:  "WARN",
+	InfoLevel:  "INFO",
+	DebugLevel: "DEBUG",
 }
 
 // 输出色彩
@@ -55,6 +58,7 @@ const (
 	InfoFormat  = "%s"
 	WarnFormat  = "%s"
 	ErrorFormat = "%s"
+	DebugFormat = "%s"
 )
 
 func NewLogger(name string) *Logger {
@@ -107,6 +111,15 @@ func (logger *Logger) Error(format string, v ...any) {
 		content := fmt.Sprintf("[%5s] %s"+format,
 			append([]interface{}{logLevelName[ErrorLevel], logger.getPrefix()}, v...)...)
 		msg := fmt.Sprintf(ErrorFormat, content)
+		logger.msgChan <- msg
+	}
+}
+
+func (logger *Logger) Debug(format string, v ...any) {
+	if logger.logLevel >= DebugLevel {
+		content := fmt.Sprintf("[%5s] %s"+format,
+			append([]interface{}{logLevelName[DebugLevel], logger.getPrefix()}, v...)...)
+		msg := fmt.Sprintf(DebugFormat, content)
 		logger.msgChan <- msg
 	}
 }

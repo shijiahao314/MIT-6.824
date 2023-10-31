@@ -1,11 +1,11 @@
 package raft
 
-// Candidate接收投票结果回调
+// Candidate发送投票请求与接收投票回复
 func (rf *Raft) candidateRequestVote(server int, args *RequestVoteArgs, voteCount *int) {
 	reply := RequestVoteReply{}
 	ok := rf.sendRequestVote(server, args, &reply)
 	if !ok {
-		// RPC发送失败
+		// RPC发送或接收失败
 		return
 	}
 	rf.mu.Lock()
@@ -17,44 +17,51 @@ func (rf *Raft) candidateRequestVote(server int, args *RequestVoteArgs, voteCoun
 	}
 	if reply.Term < args.Term {
 		// 回复的任期小于请求任期
+		rf.logger.Warn("candidateRequestVote: old reply=%v, args.Term=%d", reply, args.Term)
 		return
 	}
 	if !reply.VoteGranted {
+		// 拒绝为自己投票
 		return
 	}
 	*voteCount++
 	rf.logger.Info("<- [%d], get vote, now vote count [%d / %d]", server, *voteCount, len(rf.peers))
 	// 下面代码可能会执行多次，使用sync.Once确保只执行一次？
 	// 本段使用了rf.mu.Lock()，且下面修改了rf.state，因此不会执行多次，可以不用sync.Once
-	if (*voteCount<<1) > len(rf.peers) && args.Term == rf.currentTerm && rf.state == Candidate {
+	if rf.state == Candidate && (*voteCount<<1) > len(rf.peers) && args.Term == rf.currentTerm {
 		// 成为leader
 		rf.state = Leader
-		lastLogIndex := rf.log.lastLog().Index
-		rf.logger.Info("become leader, lastLogIndex=[%d], len(rf.log)=[%d]", lastLogIndex, rf.log.len())
-		// 成为Leader后，发挥Raft强主机制，强制同步
-		for server := range rf.peers {
-			rf.nextIndex[server] = lastLogIndex + 1
-			rf.matchIndex[server] = 0
-		}
+		rf.logger.Info("become leader, rf=%v", rf)
 		// Upon election: send initial empty AppendEntries RPCs (heartbeat) to each server;
 		// repeat during idle periods to prevent election timeouts
-		rf.mu.Unlock()
-		go rf.leaderCheckSendAppendEntries(true)
-		rf.mu.Lock()
-		// 为什么不使用 go rf.appendEntries(true) 提高并发？
-		// 会导致提前释放rf.mu，增加心跳乱序可能性
+		// 成为Leader后，立即同步（注册）一次，防止选举超时
+		lastLogIndex := rf.log.lastLog().Index
+		for server := range rf.peers {
+			// 下面这个是错误的，为什么？
+			// if server == rf.me {
+			// 	// 设置自身的matchIndex和nextIndex
+			// 	rf.matchIndex[server] = max(rf.lastIncludedIndex, rf.lastApplied)
+			// 	rf.nextIndex[server] = rf.matchIndex[server] + 1
+			// 	continue
+			// }
+			// 初始化leader对于所有server的matchIndex和nextIndex
+			rf.matchIndex[server] = 0
+			rf.nextIndex[server] = lastLogIndex + 1
+		}
+		go rf.leaderCheckSendAppendEntries()
 	}
 }
 
-// 设置定时器
+// 发起选举
 func (rf *Raft) leaderElection() {
-	// 发起选举
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	rf.persist(nil)
 	rf.state = Candidate
-	rf.setLeaderTimeout()
-	rf.logger.Info("timeout leader election, rf.currentTerm=[%d]", rf.currentTerm)
+	rf.resetLeaderTimeout()
+	rf.logger.Info("timeout leader election, rf=%+v", rf)
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
 		CandidateId:  rf.me,

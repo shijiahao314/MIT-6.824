@@ -30,7 +30,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Success = false
 	if args.Term > rf.currentTerm {
 		// 大于自身任期
-		rf.logger.Info("<- [%d], args.Term > rf.currentTerm, accept AppendEntries", args.LeaderId)
+		rf.logger.Info("<- [%d], args.Term > rf.currentTerm, setNewTerm", args.LeaderId)
 		rf.setNewTerm(args.Term)
 		return
 	}
@@ -40,38 +40,38 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	// 等于自身任期
-	rf.setLeaderTimeout()
+	rf.resetLeaderTimeout()
 	if rf.state == Candidate {
 		// If AppendEntries RPC received from new leader: convert to follower
 		rf.state = Follower
 	}
 	// Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm
 	if len(args.Entries) != 0 {
-		rf.logger.Error("rf.log.lastLog().Index=[%d], args.PrevLogIndex=[%d]", rf.log.lastLog().Index, args.PrevLogIndex)
+		rf.logger.Error("rf.log.lastIndex()=[%d], args.PrevLogIndex=[%d]", rf.log.lastIndex(), args.PrevLogIndex)
 	}
 	// leader认为server已经有包含PrecLogIndex及之前的日志项
 	// 因此leader发送的args.Entry只有PrecLogIndex之后的的日志项
 	// 若server存在没有PrecLogIndex及之前的日志项，则矛盾
 	if rf.lastIncludedIndex < args.PrevLogIndex {
-		if rf.log.lastLog().Index < args.PrevLogIndex {
+		if rf.log.lastIndex() < args.PrevLogIndex {
 			// server不包含PrevLogIndex
 			reply.Conflict = true
 			reply.XTerm = -1
 			reply.XIndex = -1
 			reply.XLen = rf.lastApplied + 1
-			rf.logger.Info("[%v]: Conflict1 XTerm %v, XIndex %v, XLen %v", rf.me, reply.XTerm, reply.XIndex, reply.XLen)
+			rf.logger.Info("Conflict1 XTerm %v, XIndex %v, XLen %v", reply.XTerm, reply.XIndex, reply.XLen)
 			return
 		}
-		if rf.log.get(args.PrevLogIndex).Term != args.PrevLogTerm {
+		if rf.log.index(args.PrevLogIndex).Term != args.PrevLogTerm {
 			// server有PrevLogIndex，但是Term不一致
 			rf.logger.Warn("args.PrevLogIndex=%d, args.PrevLogTerm=%d", args.PrevLogIndex, args.PrevLogTerm)
-			rf.logger.Warn("rf.log=%v", rf.log)
-			rf.logger.Warn("rf.log.get(args.PrevLogIndex).Term=%d", rf.log.get(args.PrevLogIndex).Term)
+			rf.logger.Warn("rf.log=%+v", rf.log)
+			rf.logger.Warn("rf.log.get(args.PrevLogIndex).Term=%d", rf.log.index(args.PrevLogIndex).Term)
 			rf.logger.Warn("args.PrevLogTerm=%d", args.PrevLogTerm)
 			reply.Conflict = true
-			xTerm := rf.log.get(args.PrevLogIndex).Term
+			xTerm := rf.log.index(args.PrevLogIndex).Term
 			for xIndex := args.PrevLogIndex; xIndex > 0; xIndex-- {
-				if rf.log.get(xIndex-1).Term != xTerm {
+				if rf.log.index(xIndex-1).Term != xTerm {
 					reply.XIndex = xIndex
 					break
 				}
@@ -85,25 +85,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	// 日志同步
 	for idx, entry := range args.Entries {
-		// args: [{10 2 30} {10 3 1000}]
-		//   rf: [{1 1 10} {1 2 20}]
-		// 寻找第一个
-		rf.logger.Info("args.Entries=%v, rf.log=%v", args.Entries, rf.log)
-		if entry.Index <= rf.log.lastLog().Index && entry.Term != rf.log.get(entry.Index).Term {
-			rf.logger.Error("entry.Index=%d, rf.log.lastLog().Index=%d", entry.Index, rf.log.lastLog().Index)
+		// 寻找第一个矛盾的
+		if entry.Index <= rf.log.lastIndex() && entry.Term != rf.log.index(entry.Index).Term {
 			// If an existing entry conflicts with a new one (same index but different terms),
 			// delete the existing entry and all that follow it
-			// rf.log.truncate(entry.Index)
 			rf.log.truncateBefore(entry.Index)
-			// rf: [{1 1 10}]
 			rf.persist(nil)
 		}
-		// 不能用else-if，因为上面修改了rf.log
-		if entry.Index > rf.log.lastLog().Index {
+		// 不能用else-if，因为上面可能修改了rf.log
+		if entry.Index > rf.log.lastIndex() {
 			// Append any new entries not already in the log
 			rf.log.append(args.Entries[idx:]...)
 			rf.logger.Info("append %v", args.Entries[idx:])
-			rf.logger.Info("After append, rf.log=%v", rf.log)
+			rf.logger.Info("after append, rf.log=%+v", rf.log)
 			rf.persist(nil)
 			break
 		}
@@ -112,7 +106,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// rf.logger.Info("after sync, rf.log=%v", rf.log)
 	// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, rf.log.lastLog().Index)
+		rf.commitIndex = min(args.LeaderCommit, rf.log.lastIndex())
 		rf.apply()
 	}
 	reply.Success = true
@@ -124,12 +118,13 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 }
 
 func (rf *Raft) leaderCheckCommit() {
+	// 本方法不加锁，建议调用该方法时持有锁
 	if rf.state != Leader {
 		return
 	}
-	for idx := rf.commitIndex + 1; idx <= rf.log.lastLog().Index; idx++ {
+	for idx := max(rf.lastIncludedIndex, rf.commitIndex) + 1; idx <= rf.log.lastIndex(); idx++ {
 		// 依次检查每一个Entry是否达到多数节点提交条件
-		if rf.log.get(idx).Term != rf.currentTerm {
+		if rf.log.index(idx).Term != rf.currentTerm {
 			continue
 		}
 		count := 1
@@ -155,39 +150,43 @@ func (rf *Raft) leaderSendAppendEntries(server int, args *AppendEntriesArgs) {
 	if !ok {
 		return
 	}
-	if len(args.Entries) != 0 {
-		rf.logger.Info("-> [%d], AppendEntries args=%v", server, args)
-	}
+	// 判断reply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if reply.Term > rf.currentTerm {
+		rf.logger.Info("<- [%d], AppendEntries, reply.Term > rf.currentTerm, reply=%+v", server, reply)
 		rf.setNewTerm(reply.Term)
+		return
+	}
+	if reply.Term < rf.currentTerm {
+		rf.logger.Warn("<- [%d], AppendEntries, reply.Term < rf.currentTerm, reply=%+v", server, reply)
 		return
 	}
 	if args.Term == rf.currentTerm {
 		if len(args.Entries) != 0 {
-			rf.logger.Info("<- [%d], AppendEntries reply=%v", server, reply)
+			rf.logger.Info("<- [%d], AppendEntries reply=%+v", server, reply)
 		}
 		if reply.Success {
-			// If successful: update nextIndex and matchIndex for follower
+			// 成功，更新match和next
 			match := args.PrevLogIndex + len(args.Entries)
 			next := match + 1
-			rf.nextIndex[server] = max(rf.nextIndex[server], next)
 			rf.matchIndex[server] = max(rf.matchIndex[server], match)
-			if len(args.Entries) != 0 {
-				rf.logger.Info("rf.matchIndex[%d]=[%d], rf.nextIndex[%d]=[%d]", server, rf.matchIndex[server], server, rf.nextIndex[server])
-			}
+			rf.nextIndex[server] = max(rf.nextIndex[server], next)
 		} else if reply.Conflict {
-			// 矛盾了
-			rf.logger.Info("Conflict from %v %#v", server, reply)
+			// 矛盾，检查并设置next
+			rf.logger.Info("<- [%d] conflict reply=%+v", server, reply)
 			if reply.XTerm == -1 {
+				// leader发送的log起始点太靠后（server没有PrevLog），调整next
 				rf.nextIndex[server] = reply.XLen
 			} else {
-				// Leader找自己log中term为XTerm的最大Entry的Index: lastLogInXTerm
-				lastLogInXTerm := rf.findLastLogInTerm(reply.XTerm)
-				rf.logger.Info("lastLogInXTerm %v", lastLogInXTerm)
-				if lastLogInXTerm > 0 {
-					rf.nextIndex[server] = lastLogInXTerm
+				// *较难理解：快速同步-可能不止一次-可以减少发送次数
+				// server有PrevLog，但是Term不一致，调整next（Raft强主）
+				// 需要leader找自己log中term为XTerm的最大index
+				// 若找到，则将next设为该index
+				// 否则使用server认为的开始同步点
+				lastIndexXTerm := rf.findLastLogInTerm(reply.XTerm)
+				if lastIndexXTerm > 0 {
+					rf.nextIndex[server] = lastIndexXTerm
 				} else {
 					rf.nextIndex[server] = reply.XIndex
 				}
@@ -208,15 +207,18 @@ func (rf *Raft) leaderSendAppendEntries(server int, args *AppendEntriesArgs) {
 	}
 }
 
-func (rf *Raft) leaderCheckSendAppendEntries(heartbeat bool) {
+// leader check to send AppendEntries rpc request
+func (rf *Raft) leaderCheckSendAppendEntries() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	for server := range rf.peers {
 		if server == rf.me {
 			continue
 		}
-		nextIndex := rf.nextIndex[server]
-		if rf.lastIncludedIndex >= nextIndex {
+		nextIndex := rf.nextIndex[server] // leader认为server期望接收的index
+		// 检查发送条件，判断应该发送什么
+		if nextIndex <= rf.lastIncludedIndex {
+			// leader的snapshot里有server所需的index
 			// 应该发送快照
 			args := InstallSnapshotArgs{
 				Term:              rf.currentTerm,
@@ -225,55 +227,34 @@ func (rf *Raft) leaderCheckSendAppendEntries(heartbeat bool) {
 				LastIncludedTerm:  rf.lastIncludedTerm,
 				Data:              rf.persister.ReadSnapshot(),
 			}
-			rf.logger.Warn("rf.persister.snapshot=%v", rf.persister.snapshot)
-			rf.logger.Info("-> [%d], leaderSendInstallSnapshot, args=%v", server, args)
+			rf.logger.Info("-> [%d], leaderSendInstallSnapshot, args=%+v", server, args)
 			go rf.leaderSendInstallSnapshot(server, &args)
 			// 该server处理完毕
 			continue
-		}
-		// leader的最后一项日志
-		lastLog := rf.log.lastLog()
-		// 如果lastLog.Index == 0（rf.log无数据）,
-		// 且nextIndex > rf.lastIncludedIndex
-		// 那么无论如何都无法满足server所需数据
-		prevLog := rf.log.get(nextIndex - 1)
-		// rf.logger.Info("nextIndex=%d, rf.log=%v, prevLog=%v", nextIndex, rf.log, prevLog)
-		if prevLog.Index == 0 {
-			// rf.logger.Info("prevLog not existed, use lastIncluded instead")
-			// prevLog不存在于rf.log中，那么用lastIncluded代替
-			prevLog.Index = rf.lastIncludedIndex
-			prevLog.Term = rf.lastIncludedTerm
-			// rf.logger.Info("prevLog=%v", prevLog)
-		}
-		if lastLog.Index >= nextIndex {
-			// If last log index ≥ nextIndex for a follower:
-			// send AppendEntries RPC with log entries starting at nextIndex
-			// 0 <= rf.lastIncludedIndex < nextIndex <= lastLog.Index
-			// 一定有所需要的数据（至少有一条）
+		} else {
+			// leader的snapshot里没有server所需index
+			prevLogIndex := nextIndex - 1
+			prevLogTerm := rf.log.index(prevLogIndex).Term
+			lastIndex := rf.log.lastIndex()
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,
 				LeaderId:     rf.me,
-				PrevLogIndex: prevLog.Index,
-				PrevLogTerm:  prevLog.Term,
-				Entries:      rf.log.between(nextIndex, lastLog.Index+1),
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  prevLogTerm,
+				Entries:      []Entry{},
 				LeaderCommit: rf.commitIndex,
 			}
-			// rf.logger.Info("rf.log=%v", rf.log)
-			// rf.logger.Info("nextIndex=%d, lastLog.Index+1=%d", nextIndex, lastLog.Index+1)
-			// rf.logger.Info("rf.log.between(nextIndex, lastLog.Index+1)=%v", rf.log.between(nextIndex, lastLog.Index+1))
-			rf.logger.Info("-> [%d], leaderSendAppendEntries, args=%v", server, args)
-			go rf.leaderSendAppendEntries(server, &args)
-		} else if heartbeat {
-			// 没有所需要的数据，发送心跳包
-			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
-				PrevLogIndex: prevLog.Index,
-				PrevLogTerm:  prevLog.Term,
-				Entries:      make([]Entry, 0),
-				LeaderCommit: rf.commitIndex,
+			if nextIndex <= lastIndex {
+				// 但leader的log里有
+				// 设置所需发送的Entries
+				args.Entries = rf.log.between(nextIndex, lastIndex+1)
+				// 发送数据包
+				rf.logger.Info("-> [%d], leaderSendAppendEntries, args=%+v", server, args)
+				go rf.leaderSendAppendEntries(server, &args)
+			} else {
+				// 都没有，只发送简单心跳包
+				go rf.leaderSendAppendEntries(server, &args)
 			}
-			go rf.leaderSendAppendEntries(server, &args)
 		}
 	}
 }

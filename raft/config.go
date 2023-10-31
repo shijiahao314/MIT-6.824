@@ -222,11 +222,9 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 	}
 
 	for m := range applyCh {
-		fmt.Printf("[Client] <- [%d], receive m=%v\n", i, m)
 		err_msg := ""
 		if m.SnapshotValid {
 			cfg.mu.Lock()
-			fmt.Printf("[Client] <- [%d], m.SnapshotIndex=%d\n", i, m.SnapshotIndex)
 			err_msg = cfg.ingestSnap(i, m.Snapshot, m.SnapshotIndex)
 			cfg.mu.Unlock()
 		} else if m.CommandValid {
@@ -585,7 +583,6 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-				fmt.Printf("index=[%d], [%d / %d]\n", index, nd, expectedServers)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {

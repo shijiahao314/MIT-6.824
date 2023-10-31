@@ -54,7 +54,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.persist(nil)
 		reply.VoteGranted = true
 	}
-	rf.logger.Info("upToDate=%v, reply=%v", upToDate, reply)
 }
 
 // example code to send a RequestVote RPC to a server.

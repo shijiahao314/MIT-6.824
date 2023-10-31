@@ -1119,7 +1119,6 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		}
 
 		if disconnect {
-			fmt.Printf("WARNING: disconnect [%d]\n", victim)
 			cfg.disconnect(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
@@ -1130,7 +1129,6 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 
 		// perhaps send enough to get a snapshot
 		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval)
-		fmt.Printf("nn=%d\n", nn)
 		for i := 0; i < nn; i++ {
 			cfg.rafts[sender].Start(rand.Int())
 		}
@@ -1140,9 +1138,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			// make sure all followers have caught up, so that
 			// an InstallSnapshot RPC isn't required for
 			// TestSnapshotBasic2D().
-			fmt.Printf("TestSnapshotBasic2D(), cfg.one\n")
 			cfg.one(rand.Int(), servers, true)
-			fmt.Printf("TestSnapshotBasic2D(), cfg.one finish\n")
 		} else {
 			cfg.one(rand.Int(), servers-1, true)
 		}
@@ -1153,7 +1149,6 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		if disconnect {
 			// reconnect a follower, who maybe behind and
 			// needs to rceive a snapshot to catch up.
-			fmt.Printf("WARNING: connect [%d]\n", victim)
 			cfg.connect(victim)
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
