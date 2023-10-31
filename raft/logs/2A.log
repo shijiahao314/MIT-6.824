@@ -1,0 +1,10 @@
+Test2A: 1 
+Test (2A): initial election ...
+  ... Passed --   3.0  3  108   33074    0
+Test (2A): election after network failure ...
+  ... Passed --   4.5  3  234   52359    0
+Test (2A): multiple elections ...
+  ... Passed --   5.5  7 1164  255878    0
+PASS
+ok  	6.5840lab2/raft	12.994s
+
