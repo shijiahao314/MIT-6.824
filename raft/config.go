@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"6.5840lab2/labgob"
-	"6.5840lab2/labrpc"
+	"6.5840/labgob"
+	"6.5840/labrpc"
 
 	crand "crypto/rand"
 	"encoding/base64"

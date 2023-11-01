@@ -28,7 +28,13 @@ func (e Entry) String() string {
 			return fmt.Sprintf("{%d %d %.4s..}", e.Term, e.Index, str)
 		}
 		return fmt.Sprintf("{%d %d %s}", e.Term, e.Index, str)
+	} else if value, ok := e.Command.(string); ok {
+		if len(value) > 6 {
+			return fmt.Sprintf("{%d %d %.4s..}", e.Term, e.Index, value)
+		}
+		return fmt.Sprintf("{%d %d %s}", e.Term, e.Index, value)
 	}
+	fmt.Printf("type=%T\n", e.Command)
 	return fmt.Sprintf("{%d %d %v}", e.Term, e.Index, e.Command)
 }
 

@@ -51,6 +51,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		// 未投票或者投的是发送方
 		// 为其投票续租
 		rf.votedFor = args.CandidateId
+		rf.resetLeaderTimeout() // 是否需要
 		rf.persist(nil)
 		reply.VoteGranted = true
 	}

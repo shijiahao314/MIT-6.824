@@ -61,10 +61,13 @@ const (
 	DebugFormat = "%s"
 )
 
-func NewLogger(name string) *Logger {
+func NewLogger(name string, level LogLevel) *Logger {
+	if level == -1 {
+		level = DEFAULT_LOG_LEVEL
+	}
 	logger := Logger{
 		name:     name,
-		logLevel: DEFAULT_LOG_LEVEL,
+		logLevel: level,
 		msgChan:  printMsgChan,
 	}
 	return &logger

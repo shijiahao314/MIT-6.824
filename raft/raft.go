@@ -22,16 +22,17 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	//	"6.5840/labgob"
-	"6.5840lab2/labgob"
-	"6.5840lab2/labrpc"
+	"6.5840/labgob"
+	"6.5840/labrpc"
 
 	// debug tools
-	"6.5840lab2/debugutils"
+	"6.5840/debugutils"
 )
 
 // as each Raft peer becomes aware that successive log entries are
@@ -53,6 +54,26 @@ type ApplyMsg struct {
 	Snapshot      []byte
 	SnapshotTerm  int
 	SnapshotIndex int
+}
+
+func (msg ApplyMsg) String() string {
+	command := msg.Command
+	if value, ok := msg.Command.(int); ok {
+		str := strconv.Itoa(value)
+		if len(str) > 6 {
+			command = fmt.Sprintf("%.4s..", str)
+		} else {
+			command = value
+		}
+	} else if value, ok := msg.Command.(string); ok {
+		if len(value) > 6 {
+			command = fmt.Sprintf("%.4s..", value)
+		} else {
+			command = value
+		}
+	}
+	return fmt.Sprintf("{CommandValid=%t CommandIndex=%d Command=%v SnapshotValid=%t len(Snapshot)=%d SnapshotTerm=%d SnapshotIndex=%d}",
+		msg.CommandValid, msg.CommandIndex, command, msg.SnapshotValid, len(msg.Snapshot), msg.SnapshotTerm, msg.SnapshotIndex)
 }
 
 type RaftState int
@@ -258,7 +279,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.matchIndex[rf.me] = index
 	rf.nextIndex[rf.me] = index + 1
 	rf.persist(nil)
-	rf.logger.Info("<- [Client], receive command %v", command)
+	rf.logger.Info("<- [Client], receive command")
+	rf.logger.Debug("command=%v", command)
 	rf.logger.Info("after receive, rf.log=%v", rf.log)
 	return index, term, isLeader
 }
@@ -319,7 +341,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	// debug
-	rf.logger = *debugutils.NewLogger(fmt.Sprintf("%d", me))
+	rf.logger = *debugutils.NewLogger(fmt.Sprintf("Raft %d", me), debugutils.Slient)
 	//
 	rf.currentTerm = 0
 	rf.votedFor = -1
