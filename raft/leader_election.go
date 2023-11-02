@@ -2,12 +2,14 @@ package raft
 
 // Candidate发送投票请求与接收投票回复
 func (rf *Raft) candidateRequestVote(server int, args *RequestVoteArgs, voteCount *int) {
+	rf.logger.Debug("-> [%d], send vote request, args=%+v", server, args)
 	reply := RequestVoteReply{}
 	ok := rf.sendRequestVote(server, args, &reply)
 	if !ok {
 		// RPC发送或接收失败
 		return
 	}
+	rf.logger.Debug("<- [%d], get vote reply, reply=%+v", server, reply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if reply.Term > args.Term {
@@ -21,7 +23,7 @@ func (rf *Raft) candidateRequestVote(server int, args *RequestVoteArgs, voteCoun
 		return
 	}
 	if !reply.VoteGranted {
-		// 拒绝为自己投票
+		// 拒绝给自己投票
 		return
 	}
 	*voteCount++
@@ -48,7 +50,13 @@ func (rf *Raft) candidateRequestVote(server int, args *RequestVoteArgs, voteCoun
 			rf.matchIndex[server] = 0
 			rf.nextIndex[server] = lastLogIndex + 1
 		}
-		go rf.leaderCheckSendAppendEntries()
+		// 当选后，立即发送
+		go func() {
+			rf.applyCh <- ApplyMsg{}
+		}()
+		rf.resetHeartbeatTimeout()
+		go rf.leaderHeartBeat()
+		go rf.leaderProcess(rf.currentTerm)
 	}
 }
 
@@ -61,6 +69,7 @@ func (rf *Raft) leaderElection() {
 	rf.persist(nil)
 	rf.state = Candidate
 	rf.resetLeaderTimeout()
+	// rf.resetHeartbeatTimeout()
 	rf.logger.Info("timeout leader election, rf=%+v", rf)
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,

@@ -21,20 +21,16 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Invoked by candidates to gather votes
-	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
+	rf.logger.Debug("<- [%d], get vote request, args%+v, rf.currentTerm=[%d]", args.CandidateId, args, rf.currentTerm)
 	if args.Term < rf.currentTerm {
 		// 任期小于自身，拒绝
-		rf.logger.Info("<- [%d], get vote request, args.Term=[%d], rf.currentTerm=[%d]",
-			args.CandidateId, args.Term, rf.currentTerm)
 		rf.logger.Warn("args.Term < rf.currentTerm, reject vote request")
 		return
 	}
-	rf.logger.Info("<- [%d], get vote request, args.Term=[%d], rf.currentTerm=[%d]",
-		args.CandidateId, args.Term, rf.currentTerm)
 	if args.Term > rf.currentTerm {
 		// 大于自身任期
 		rf.logger.Info("args.Term > rf.currentTerm, rf.setNewTerm(args.Term)")

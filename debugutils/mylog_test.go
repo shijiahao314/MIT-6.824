@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-var logger = NewLogger("S0")
+var logger = NewLogger("S0", -1)
 
 func init() {
 	logger.SetLogLevel(ErrorLevel)

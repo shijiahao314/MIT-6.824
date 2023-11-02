@@ -1,5 +1,9 @@
 package raft
 
+import (
+	"time"
+)
+
 type AppendEntriesArgs struct {
 	Term         int     // leader’s term
 	LeaderId     int     // so follower can redirect clients
@@ -21,13 +25,14 @@ type AppendEntriesReply struct {
 	XLen     int // log length
 }
 
+// Invoked by leader to replicate log entries
+// also used as heartbeat
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	// Invoked by leader to replicate log entries
-	// also used as heartbeat
 	reply.Term = rf.currentTerm
 	reply.Success = false
+	rf.logger.Debug("<- [%d], receive AppendEntries, args=%v", args.LeaderId, args)
 	if args.Term > rf.currentTerm {
 		// 大于自身任期
 		rf.logger.Info("<- [%d], args.Term > rf.currentTerm, setNewTerm", args.LeaderId)
@@ -208,12 +213,65 @@ func (rf *Raft) leaderSendAppendEntries(server int, args *AppendEntriesArgs) {
 }
 
 // leader check to send AppendEntries rpc request
-func (rf *Raft) leaderCheckSendAppendEntries() {
+// func (rf *Raft) leaderCheckSendAppendEntries() {
+// 	rf.mu.Lock()
+// 	defer rf.mu.Unlock()
+// 	for server := range rf.peers {
+// 		if server == rf.me {
+// 			continue
+// 		}
+// 		nextIndex := rf.nextIndex[server] // leader认为server期望接收的index
+// 		// 检查发送条件，判断应该发送什么
+// 		if nextIndex <= rf.lastIncludedIndex {
+// 			// leader的snapshot里有server所需的index
+// 			// 应该发送快照
+// 			args := InstallSnapshotArgs{
+// 				Term:              rf.currentTerm,
+// 				LeaderId:          rf.me,
+// 				LastIncludedIndex: rf.lastIncludedIndex,
+// 				LastIncludedTerm:  rf.lastIncludedTerm,
+// 				Data:              rf.persister.ReadSnapshot(),
+// 			}
+// 			rf.logger.Info("-> [%d], leaderSendInstallSnapshot, args=%+v", server, args)
+// 			go rf.leaderSendInstallSnapshot(server, &args)
+// 			// 该server处理完毕
+// 			continue
+// 		} else {
+// 			// leader的snapshot里没有server所需index
+// 			prevLogIndex := nextIndex - 1
+// 			prevLogTerm := rf.log.index(prevLogIndex).Term
+// 			lastIndex := rf.log.lastIndex()
+// 			args := AppendEntriesArgs{
+// 				Term:         rf.currentTerm,
+// 				LeaderId:     rf.me,
+// 				PrevLogIndex: prevLogIndex,
+// 				PrevLogTerm:  prevLogTerm,
+// 				Entries:      []Entry{},
+// 				LeaderCommit: rf.commitIndex,
+// 			}
+// 			if nextIndex <= lastIndex {
+// 				// 但leader的log里有
+// 				// 设置所需发送的Entries
+// 				args.Entries = rf.log.between(nextIndex, lastIndex+1)
+// 				// 发送数据包
+// 				rf.logger.Info("-> [%d], leaderSendAppendEntries, args=%+v", server, args)
+// 				go rf.leaderSendAppendEntries(server, &args)
+// 			} else {
+// 				// 都没有，只发送简单心跳包
+// 				go rf.leaderSendAppendEntries(server, &args)
+// 			}
+// 		}
+// 	}
+// }
+
+// leader发送给特定server的go程，为特定的server发送数据/心跳
+func (rf *Raft) sendServerProcess(server int, currentTerm int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	for server := range rf.peers {
-		if server == rf.me {
-			continue
+	for !rf.killed() {
+		if rf.state != Leader || rf.currentTerm != currentTerm {
+			// 不是leader或不是currentTerm任期，则退出
+			return
 		}
 		nextIndex := rf.nextIndex[server] // leader认为server期望接收的index
 		// 检查发送条件，判断应该发送什么
@@ -230,7 +288,6 @@ func (rf *Raft) leaderCheckSendAppendEntries() {
 			rf.logger.Info("-> [%d], leaderSendInstallSnapshot, args=%+v", server, args)
 			go rf.leaderSendInstallSnapshot(server, &args)
 			// 该server处理完毕
-			continue
 		} else {
 			// leader的snapshot里没有server所需index
 			prevLogIndex := nextIndex - 1
@@ -256,5 +313,44 @@ func (rf *Raft) leaderCheckSendAppendEntries() {
 				go rf.leaderSendAppendEntries(server, &args)
 			}
 		}
+		// 使用Wait，提高响应速度（来信息可以立即响应），会主动释放锁
+		rf.newLogCome.Wait()
 	}
+}
+
+// leader进程，为每一个server启用一个goroutine发送数据/心跳
+func (rf *Raft) leaderProcess(currentTerm int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	for server := range rf.peers {
+		if server == rf.me {
+			continue
+		}
+		go rf.sendServerProcess(server, currentTerm)
+	}
+}
+
+// leader检测是否该发送heartbeat的go程
+func (rf *Raft) leaderHeartBeat() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	for !rf.killed() {
+		sleepTime := time.Until(rf.leaderTimeout)
+		rf.mu.Unlock()
+		// sleep
+		time.Sleep(sleepTime)
+		rf.mu.Lock()
+		if rf.state != Leader {
+			return
+		}
+		if time.Now().After(rf.leaderTimeout) {
+			rf.broadcastLog()
+		}
+	}
+}
+
+// resetHeartbeatTimeout
+func (rf *Raft) resetHeartbeatTimeout() {
+	// 本方法不加锁，建议调用该方法时持有锁
+	rf.leaderTimeout = time.Now().Add(heartbeatInterval)
 }

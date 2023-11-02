@@ -34,7 +34,6 @@ func (e Entry) String() string {
 		}
 		return fmt.Sprintf("{%d %d %s}", e.Term, e.Index, value)
 	}
-	fmt.Printf("type=%T\n", e.Command)
 	return fmt.Sprintf("{%d %d %v}", e.Term, e.Index, e.Command)
 }
 
