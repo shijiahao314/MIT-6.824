@@ -3,13 +3,18 @@ package kvraft
 import (
 	"fmt"
 	"time"
+
+	"6.5840/debugutils"
 )
 
-// other const
+// some configs
 const (
 	NoLeaderSleepTime   = 100 * time.Millisecond
 	RaftstateLoadFactor = 0.9 // kv.persister.RaftStateSize() should <= maxraftstate * RaftstateLoadFactor
 	RequestWaitTime     = 100 * time.Millisecond
+	// default loglevel: Slient DebugLevel
+	ServerDefaultLogLevel = debugutils.Slient
+	ClientDefaultLogLevel = debugutils.Slient
 )
 
 // Err

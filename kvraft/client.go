@@ -44,7 +44,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	idMu.Unlock()
 	ck.seqId = 0
 	ck.leaderId = 0
-	ck.logger = *debugutils.NewLogger(fmt.Sprintf("Clerk %d", ck.clientId), debugutils.Slient)
+	ck.logger = *debugutils.NewLogger(fmt.Sprintf("Clerk %d", ck.clientId), ClientDefaultLogLevel)
 
 	ck.logger.Debug("success make ck=%+v", ck)
 
@@ -118,6 +118,7 @@ func (ck *Clerk) PutAppend(key string, value string, op OpType) {
 		server := (ck.leaderId + i) % len(ck.servers)
 		reply := PutAppendReply{}
 		ok := ck.servers[server].Call("KVServer.PutAppend", &args, &reply)
+		ck.logger.Info("server=[%d], ok=[%t] reply=%+v", server, ok, reply)
 		if ok {
 			switch reply.Err {
 			case OK:

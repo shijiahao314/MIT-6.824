@@ -44,8 +44,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 若server存在没有PrecLogIndex及之前的日志项，则矛盾
 	if args.PrevLogIndex > 0 {
 		// 不为xxx
-		rf.logger.Warn("rf.log.lastIndex()=[%d], args.PrevLogIndex=[%d]",
-			rf.log.lastIndex(), args.PrevLogIndex)
 		if rf.log.lastIndex() < args.PrevLogIndex {
 			// server不包含PrevLogIndex
 			reply.Conflict = true

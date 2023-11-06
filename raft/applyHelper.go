@@ -24,7 +24,7 @@ func makeApplyHelper(id int, applyChan chan ApplyMsg, lastApplied int) *ApplyHel
 		applyCh:   applyChan,
 		lastIndex: lastApplied,
 		queue:     make([]ApplyMsg, 0),
-		logger:    *debugutils.NewLogger(fmt.Sprintf("ApplyHelper %d", id), debugutils.Slient),
+		logger:    *debugutils.NewLogger(fmt.Sprintf("ApplyHelper %d", id), ApplyHelperDefaultLogLevel),
 	}
 	applyHelper.cond = sync.NewCond(&applyHelper.mu)
 

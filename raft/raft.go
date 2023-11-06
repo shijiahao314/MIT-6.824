@@ -280,7 +280,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// debug
-	rf.logger = *debugutils.NewLogger(fmt.Sprintf("Raft %d", me), debugutils.Slient)
+	rf.logger = *debugutils.NewLogger(fmt.Sprintf("Raft %d", me), RaftDefaultLogLevel)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(rf.persister.ReadRaftState())

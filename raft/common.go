@@ -4,60 +4,28 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"6.5840/debugutils"
 )
 
-// as each Raft peer becomes aware that successive log entries are
-// committed, the peer should send an ApplyMsg to the service (or
-// tester) on the same server, via the applyCh passed to Make(). set
-// CommandValid to true to indicate that the ApplyMsg contains a newly
-// committed log entry.
-//
-// in part 2D you'll want to send other kinds of messages (e.g.,
-// snapshots) on the applyCh, but set CommandValid to false for these
-// other uses.
-type ApplyMsg struct {
-	CommandValid bool
-	CommandIndex int
-	Command      interface{}
+// some configs
+const (
+	heartbeatInterval   = 50 * time.Millisecond // 心跳间隔
+	heartbeatTimeoutMin = 150                   // 心跳超时min
+	heartbeatTimeoutMax = 500                   // 心跳超时max
 
-	SnapshotValid bool
-	Snapshot      []byte
-	SnapshotTerm  int
-	SnapshotIndex int
-}
+	// default log level
+	RaftDefaultLogLevel        = debugutils.Slient
+	ApplyHelperDefaultLogLevel = debugutils.Slient
+)
 
-func (msg ApplyMsg) String() string {
-	command := msg.Command
-	if value, ok := msg.Command.(int); ok {
-		str := strconv.Itoa(value)
-		if len(str) > 6 {
-			command = fmt.Sprintf("%.4s..", str)
-		} else {
-			command = value
-		}
-	} else if value, ok := msg.Command.(string); ok {
-		if len(value) > 6 {
-			command = fmt.Sprintf("%.4s..", value)
-		} else {
-			command = value
-		}
-	}
-	return fmt.Sprintf("{CommandValid=%t CommandIndex=%d Command=%v SnapshotValid=%t len(Snapshot)=%d SnapshotTerm=%d SnapshotIndex=%d}",
-		msg.CommandValid, msg.CommandIndex, command, msg.SnapshotValid, len(msg.Snapshot), msg.SnapshotTerm, msg.SnapshotIndex)
-}
-
+// raft state
 type RaftState int
 
 const (
 	Follower = iota
 	Candidate
 	Leader
-)
-
-const (
-	heartbeatInterval   = 50 * time.Millisecond // 心跳间隔
-	heartbeatTimeoutMin = 150                   // 心跳超时min
-	heartbeatTimeoutMax = 500                   // 心跳超时max
 )
 
 // 1.request vote
@@ -89,6 +57,38 @@ type AppendEntriesReply struct {
 	Conflict bool
 	XTerm    int // term in the conflicting entry (if any)
 	XIndex   int // 期待leader发送的下一个Index
+}
+
+// 2.1 apply msg
+type ApplyMsg struct {
+	CommandValid bool
+	CommandIndex int
+	Command      interface{}
+
+	SnapshotValid bool
+	Snapshot      []byte
+	SnapshotTerm  int
+	SnapshotIndex int
+}
+
+func (msg ApplyMsg) String() string {
+	command := msg.Command
+	if value, ok := msg.Command.(int); ok {
+		str := strconv.Itoa(value)
+		if len(str) > 6 {
+			command = fmt.Sprintf("%.4s..", str)
+		} else {
+			command = value
+		}
+	} else if value, ok := msg.Command.(string); ok {
+		if len(value) > 6 {
+			command = fmt.Sprintf("%.4s..", value)
+		} else {
+			command = value
+		}
+	}
+	return fmt.Sprintf("{CommandValid=%t CommandIndex=%d Command=%v SnapshotValid=%t len(Snapshot)=%d SnapshotTerm=%d SnapshotIndex=%d}",
+		msg.CommandValid, msg.CommandIndex, command, msg.SnapshotValid, len(msg.Snapshot), msg.SnapshotTerm, msg.SnapshotIndex)
 }
 
 // 3.install snapshot

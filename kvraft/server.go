@@ -59,7 +59,8 @@ func (kv *KVServer) getWaitCh(index int) chan CommandReply {
 	defer kv.mu.Unlock()
 	ch, ok := kv.chanMap[index]
 	if !ok {
-		kv.chanMap[index] = make(chan CommandReply)
+		// （*）这里设置一个有1缓冲的，否则死锁
+		kv.chanMap[index] = make(chan CommandReply, 1) // 内存泄漏？不会，因为会关闭通道
 		ch = kv.chanMap[index]
 	}
 	return ch
@@ -77,7 +78,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	kv.logger.Debug("Get begin, args=%+v", args)
+	kv.logger.Debug("GetOp begin, args=%+v", args)
 	// 发送指令
 	cmd := Command{
 		ClientId: args.ClientId,
@@ -88,6 +89,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	index, _, _ := kv.rf.Start(cmd)
 	// 结果回调channel
 	ch := kv.getWaitCh(index)
+	defer kv.closeAndDelete(index) // 超时或完成后关闭通道，防止内存泄漏
 	// 设置超时Timer
 	timer := time.NewTicker(RequestWaitTime)
 	defer timer.Stop()
@@ -105,7 +107,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	case <-timer.C:
 		reply.Err = ErrWrongLeader
 	}
-	kv.logger.Debug("Get end, reply=%+v", reply)
+	kv.logger.Debug("GetOp end, reply=%+v", reply)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -132,6 +134,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	index, _, _ := kv.rf.Start(cmd)
 	// 结果回调channel
 	ch := kv.getWaitCh(index)
+	defer kv.closeAndDelete(index) // 关闭通道
 	// 设置超时Timer
 	timer := time.NewTicker(RequestWaitTime)
 	defer timer.Stop()
@@ -146,7 +149,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	case <-timer.C:
 		reply.Err = ErrWrongLeader
 	}
-	kv.logger.Debug("PutAppend end, reply=%+v", reply)
+	kv.logger.Debug("%s end, reply=%+v", args.Op, reply)
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -179,7 +182,7 @@ func (kv *KVServer) ifDuplicate(clientId, seqId int) bool {
 	return seqId <= lastSeqId
 }
 
-func (kv *KVServer) closeChanDeleteKey(index int) {
+func (kv *KVServer) closeAndDelete(index int) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	close(kv.chanMap[index]) // chan应该仅由发送方关闭（*）
@@ -193,7 +196,7 @@ func (kv *KVServer) applyMsgHandler() {
 		// 从applyCh接收apply消息
 		// 可以保证从applyCh接收的消息一定是多数认可的消息，且是有序的
 		msg := <-kv.applyCh
-		// kv.logger.Debug("applier: receive apply message %+v", msg)
+		kv.logger.Debug("applier: receive apply message %+v", msg)
 		switch {
 		case msg.CommandValid:
 			// CommandValid
@@ -203,6 +206,7 @@ func (kv *KVServer) applyMsgHandler() {
 				panic("ERROR: cannot tranvert msg.Command to Command")
 			}
 			if !kv.ifDuplicate(cmd.ClientId, cmd.SeqId) {
+				kv.logger.Debug("not duplicate cmd=%+v", cmd)
 				// 不是重复的指令
 				kv.mu.Lock()
 				switch cmd.Type {
@@ -225,11 +229,12 @@ func (kv *KVServer) applyMsgHandler() {
 			}
 			// 发送消息（考虑中途变更leader情况）
 			if _, isLeader := kv.rf.GetState(); isLeader {
-				kv.getWaitCh(index) <- CommandReply{
+				commandReply := CommandReply{
 					ClientId: cmd.ClientId,
 					SeqId:    cmd.SeqId,
 				}
-				kv.closeChanDeleteKey(index)
+				kv.logger.Debug("is leader, send to chan[%d], reply=%+v", index, commandReply)
+				kv.getWaitCh(index) <- commandReply
 			}
 		case msg.SnapshotValid:
 			kv.readPersist(msg.Snapshot)
@@ -298,7 +303,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.persister = persister
 
 	// You may need initialization code here.
-	kv.logger = *debugutils.NewLogger(fmt.Sprintf("KVServer %d", kv.me), debugutils.Slient)
+	kv.logger = *debugutils.NewLogger(fmt.Sprintf("KVServer %d", kv.me), ServerDefaultLogLevel)
 	kv.kvMap = make(map[string]string)
 	kv.seqMap = make(map[int]int)
 	kv.chanMap = make(map[int]chan CommandReply)
