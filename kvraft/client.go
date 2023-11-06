@@ -12,12 +12,16 @@ import (
 )
 
 type Clerk struct {
-	servers []*labrpc.ClientEnd
-	// You will have to modify this struct.
-	ID         int
-	logger     debugutils.Logger
-	lastServer int // 记录上一个可用的server
-	version    int // 版本号
+	servers  []*labrpc.ClientEnd
+	clientId int
+	seqId    int
+	leaderId int // 记录上一个可用的server
+	// debugutils
+	logger debugutils.Logger
+}
+
+func (ck *Clerk) String() string {
+	return fmt.Sprintf("{clientId=%d  seqId=%d leaderId=%d}", ck.clientId, ck.seqId, ck.leaderId)
 }
 
 func nrand() int64 {
@@ -35,12 +39,12 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	// You'll have to add code here.
 	idMu.Lock()
-	ck.ID = ID
+	ck.clientId = ID
 	ID++
 	idMu.Unlock()
-	ck.logger = *debugutils.NewLogger(fmt.Sprintf("Clerk %d", ck.ID), debugutils.Slient)
-	ck.lastServer = 0
-	ck.version = 0
+	ck.seqId = 0
+	ck.leaderId = 0
+	ck.logger = *debugutils.NewLogger(fmt.Sprintf("Clerk %d", ck.clientId), debugutils.Slient)
 
 	ck.logger.Debug("success make ck=%+v", ck)
 
@@ -59,34 +63,34 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{
-		Key: key,
+		ClientId: ck.clientId,
+		SeqId:    ck.seqId,
+		Key:      key,
 	}
+	ck.seqId++
 	ck.logger.Info("Get RPC args=%+v", args)
 	// 不断依次向所有服务器发送请求
 	for i := 0; ; i++ {
-		server := (i + ck.lastServer) % len(ck.servers)
+		server := (ck.leaderId + i) % len(ck.servers)
 		reply := GetReply{}
 		ok := ck.servers[server].Call("KVServer.Get", &args, &reply)
-		if !ok {
-			continue
-		}
-		switch reply.Err {
-		case OK:
-			ck.logger.Info("OK\n")
-			ck.lastServer = server
-			return reply.Value
-		case ErrWrongLeader:
-			if i != 0 && i%len(ck.servers) == 0 {
-				// 已经查询完整的一轮，均无可应答KVServer
-				time.Sleep(NotLeaderSleepTime)
+		if ok {
+			switch reply.Err {
+			case OK:
+				ck.leaderId = server
+				return reply.Value
+			case ErrWrongLeader:
+				if i != 0 && i%len(ck.servers) == 0 {
+					// 已经查询完整的一轮，均无可应答KVServer
+					time.Sleep(NoLeaderSleepTime)
+				}
+				continue
+			case ErrNoKey:
+				ck.leaderId = server
+				return reply.Value
+			default:
+				panic("Unknown reply.Err")
 			}
-			continue
-		case ErrNoKey:
-			ck.logger.Info("ErrNoKey\n")
-			ck.lastServer = server
-			return reply.Value
-		default:
-			panic("Unknown reply.Err")
 		}
 	}
 }
@@ -99,60 +103,45 @@ func (ck *Clerk) Get(key string) string {
 // the types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
-func (ck *Clerk) PutAppend(key string, value string, op string) {
-	var opType OpType
-	switch op {
-	case "Put":
-		opType = PutOp
-	case "Append":
-		opType = AppendOp
-	default:
-		panic("Unknown op type")
-	}
+func (ck *Clerk) PutAppend(key string, value string, op OpType) {
 	args := PutAppendArgs{
-		Version: ck.version,
-		ID:      ck.ID,
-		Op:      opType,
-		Key:     key,
-		Value:   value,
+		ClientId: ck.clientId,
+		SeqId:    ck.seqId,
+		Op:       op,
+		Key:      key,
+		Value:    value,
 	}
-	ck.version++
+	ck.seqId++
 	ck.logger.Info("PutAppend RPC args=%+v", args)
 	// 不断依次向所有服务器发送请求
-	// 这里Clerk发送的请求只能串行化访问，
-	// 即必须等待leader server回应（心跳间隔时间）后才能发送下一个请求
-	// 可以让leader server快速回应，默认认为leader顺利执行
 	for i := 0; ; i++ {
-		server := (i + ck.lastServer) % len(ck.servers)
+		server := (ck.leaderId + i) % len(ck.servers)
 		reply := PutAppendReply{}
 		ok := ck.servers[server].Call("KVServer.PutAppend", &args, &reply)
-		if !ok {
-			continue
-		}
-		switch reply.Err {
-		case OK:
-			ck.logger.Info("OK\n")
-			ck.lastServer = server
-			return
-		case ErrWrongLeader:
-			if i != 0 && i%len(ck.servers) == 0 {
-				// 已经查询完整的一轮，均无可应答KVServer
-				time.Sleep(NotLeaderSleepTime)
+		if ok {
+			switch reply.Err {
+			case OK:
+				ck.leaderId = server
+				return
+			case ErrWrongLeader:
+				if i != 0 && i%len(ck.servers) == 0 {
+					// 已经查询完整的一轮，均无可应答KVServer
+					time.Sleep(NoLeaderSleepTime)
+				}
+				continue
+			case ErrNoKey:
+				ck.leaderId = server
+				return
+			default:
+				panic("Unknown reply.Err")
 			}
-			continue
-		case ErrNoKey:
-			ck.logger.Info("ErrNoKey\n")
-			ck.lastServer = server
-			return
-		default:
-			panic("Unknown reply.Err")
 		}
 	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.PutAppend(key, value, PutOp)
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.PutAppend(key, value, AppendOp)
 }

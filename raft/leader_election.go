@@ -33,28 +33,18 @@ func (rf *Raft) candidateRequestVote(server int, args *RequestVoteArgs, voteCoun
 	if rf.state == Candidate && (*voteCount<<1) > len(rf.peers) && args.Term == rf.currentTerm {
 		// 成为leader
 		rf.state = Leader
-		rf.logger.Info("become leader, rf=%v", rf)
-		// Upon election: send initial empty AppendEntries RPCs (heartbeat) to each server;
-		// repeat during idle periods to prevent election timeouts
-		// 成为Leader后，立即同步（注册）一次，防止选举超时
-		lastLogIndex := rf.log.lastLog().Index
-		for server := range rf.peers {
-			// 下面这个是错误的，为什么？
-			// if server == rf.me {
-			// 	// 设置自身的matchIndex和nextIndex
-			// 	rf.matchIndex[server] = max(rf.lastIncludedIndex, rf.lastApplied)
-			// 	rf.nextIndex[server] = rf.matchIndex[server] + 1
-			// 	continue
-			// }
-			// 初始化leader对于所有server的matchIndex和nextIndex
-			rf.matchIndex[server] = 0
-			rf.nextIndex[server] = lastLogIndex + 1
+		rf.matchIndex = make([]int, len(rf.peers))
+		rf.nextIndex = make([]int, len(rf.peers))
+		for server := range rf.nextIndex {
+			rf.nextIndex[server] = rf.log.lastIndex() + 1
 		}
-		// 当选后，立即发送
-		go func() {
-			rf.applyCh <- ApplyMsg{}
-		}()
 		rf.resetHeartbeatTimeout()
+		rf.logger.Info("become leader, rf=%v", rf)
+		// 成为Leader后，立即同步（注册）一次，防止选举超时
+		// go func() {
+		// 	// 这里是apply一次空ApplyMsg，告知KVServer新的leader产生
+		// 	rf.applyCh <- ApplyMsg{}
+		// }()
 		go rf.leaderHeartBeat()
 		go rf.leaderProcess(rf.currentTerm)
 	}
@@ -69,7 +59,6 @@ func (rf *Raft) leaderElection() {
 	rf.persist(nil)
 	rf.state = Candidate
 	rf.resetLeaderTimeout()
-	// rf.resetHeartbeatTimeout()
 	rf.logger.Info("timeout leader election, rf=%+v", rf)
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,

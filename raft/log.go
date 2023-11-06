@@ -15,7 +15,8 @@ func makeEmptyLog() Log {
 }
 
 type Entry struct {
-	Term    int // in which term it was created
+	Term int // in which term it was created
+	// TODO: delete this key
 	Index   int // entry index
 	Command interface{}
 }
@@ -44,6 +45,11 @@ type Log struct {
 	LastIncludedTerm  int
 }
 
+func (l Log) String() string {
+	return fmt.Sprintf("{LastIncludedIndex=%d LastIncludedTerm=%d Entries=%+v}",
+		l.LastIncludedIndex, l.LastIncludedTerm, l.Entries)
+}
+
 func (l *Log) append(entries ...Entry) {
 	l.Entries = append(l.Entries, entries...)
 }
@@ -51,6 +57,7 @@ func (l *Log) append(entries ...Entry) {
 // index项在数组中实际下标为index-(LastIncludedIndex+1)
 func (l *Log) index(index int) *Entry {
 	if index < l.LastIncludedIndex {
+		fmt.Printf("index=%d, l=%+v\n", index, l)
 		panic("ERROR: index smaller than log snapshot!\n")
 	}
 	if index > l.LastIncludedIndex+len(l.Entries) {
@@ -76,7 +83,7 @@ func (l *Log) before(index int) []Entry {
 }
 
 // do nothing if out of range
-// l.Entries = l.Entries[:index-l.Index0]
+// l.Entries = l.Entries[:index-l.LastIncludedIndex-1]
 func (l *Log) truncateBefore(index int) {
 	// 特别注意下标以及函数的表达意思
 	// index = 125
@@ -145,4 +152,8 @@ func (l *Log) lastIndex() int {
 		return l.LastIncludedIndex
 	}
 	return l.Entries[len(l.Entries)-1].Index
+}
+
+func (l *Log) clean() {
+	l.Entries = make([]Entry, 0)
 }

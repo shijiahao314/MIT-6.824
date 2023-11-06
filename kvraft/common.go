@@ -1,19 +1,15 @@
 package kvraft
 
-import "time"
-
-// time
-const (
-	NotLeaderSleepTime = 100 * time.Millisecond
+import (
+	"fmt"
+	"time"
 )
 
-type OpType int
-
+// other const
 const (
-	GetOp = iota
-	PutOp
-	AppendOp
-	NewLeader
+	NoLeaderSleepTime   = 100 * time.Millisecond
+	RaftstateLoadFactor = 0.9 // kv.persister.RaftStateSize() should <= maxraftstate * RaftstateLoadFactor
+	RequestWaitTime     = 100 * time.Millisecond
 )
 
 // Err
@@ -25,8 +21,21 @@ const (
 	ErrNoKey       = "ErrNoKey"
 )
 
+// OpType
+type OpType string
+
+const (
+	GetOp     = "GetOp"
+	PutOp     = "PutOp"
+	AppendOp  = "AppendOp"
+	NewLeader = "NewLeader"
+)
+
+// Get
 type GetArgs struct {
-	Key string
+	ClientId int // ck.clientId
+	SeqId    int // 当前ck发送的第i个请求
+	Key      string
 }
 
 type GetReply struct {
@@ -34,12 +43,17 @@ type GetReply struct {
 	Value string
 }
 
+func (reply *GetReply) String() string {
+	return fmt.Sprintf("{Err=%s Value=[%.10s]..}", reply.Err, reply.Value)
+}
+
+// PutAppend
 type PutAppendArgs struct {
-	Version int    // ck.Version
-	ID      int    // ck.ID
-	Op      OpType // "Put" or "Append"
-	Key     string
-	Value   string
+	ClientId int    // ck.clientId
+	SeqId    int    // 当前ck发送的第i个请求
+	Op       OpType // "Put" or "Append"
+	Key      string
+	Value    string
 }
 
 type PutAppendReply struct {

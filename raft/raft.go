@@ -18,76 +18,16 @@ package raft
 //
 
 import (
-	//	"bytes"
 	"bytes"
 	"fmt"
 	"math/rand"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	//	"6.5840/labgob"
+	"6.5840/debugutils"
 	"6.5840/labgob"
 	"6.5840/labrpc"
-
-	// debug tools
-	"6.5840/debugutils"
-)
-
-// as each Raft peer becomes aware that successive log entries are
-// committed, the peer should send an ApplyMsg to the service (or
-// tester) on the same server, via the applyCh passed to Make(). set
-// CommandValid to true to indicate that the ApplyMsg contains a newly
-// committed log entry.
-//
-// in part 2D you'll want to send other kinds of messages (e.g.,
-// snapshots) on the applyCh, but set CommandValid to false for these
-// other uses.
-type ApplyMsg struct {
-	CommandValid bool
-	CommandIndex int
-	Command      interface{}
-
-	// For 2D:
-	SnapshotValid bool
-	Snapshot      []byte
-	SnapshotTerm  int
-	SnapshotIndex int
-}
-
-func (msg ApplyMsg) String() string {
-	command := msg.Command
-	if value, ok := msg.Command.(int); ok {
-		str := strconv.Itoa(value)
-		if len(str) > 6 {
-			command = fmt.Sprintf("%.4s..", str)
-		} else {
-			command = value
-		}
-	} else if value, ok := msg.Command.(string); ok {
-		if len(value) > 6 {
-			command = fmt.Sprintf("%.4s..", value)
-		} else {
-			command = value
-		}
-	}
-	return fmt.Sprintf("{CommandValid=%t CommandIndex=%d Command=%v SnapshotValid=%t len(Snapshot)=%d SnapshotTerm=%d SnapshotIndex=%d}",
-		msg.CommandValid, msg.CommandIndex, command, msg.SnapshotValid, len(msg.Snapshot), msg.SnapshotTerm, msg.SnapshotIndex)
-}
-
-type RaftState int
-
-const (
-	Follower = iota
-	Candidate
-	Leader
-)
-
-const (
-	heartbeatInterval   = 50 * time.Millisecond // 心跳间隔
-	heartbeatTimeoutMin = 150
-	heartbeatTimeoutMax = 500
 )
 
 // A Go object implementing a single Raft peer.
@@ -114,10 +54,9 @@ type Raft struct {
 	rand          *rand.Rand // 随机种子
 	leaderTimeout time.Time  // leader过期时间
 	// apply
-	applyCh    chan ApplyMsg
-	applyCond  *sync.Cond
-	newLogCome *sync.Cond
-	// serverHeartbeatTime []time.Time // leader记录自己对每个server应该发送的心跳时间
+	applyCond   *sync.Cond
+	newLogCome  *sync.Cond
+	applyHelper *ApplyHelper
 	// snapshot, also persistent state on all servers
 	lastIncludedIndex int // index of snapshot (initialized to 0)
 	lastIncludedTerm  int // term of snapshot (initialized to -1)
@@ -128,11 +67,16 @@ func (rf *Raft) String() string {
 		rf.me, rf.currentTerm, rf.votedFor, rf.log, rf.commitIndex, rf.lastApplied, rf.matchIndex, rf.nextIndex, rf.state, rf.lastIncludedIndex, rf.lastIncludedTerm)
 }
 
+func (rf *Raft) GetLastIncludedIndex() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.lastIncludedIndex
+}
+
 // set new term
 func (rf *Raft) setNewTerm(term int) {
 	// 本方法不加锁，建议调用该方法时持有锁
 	if term > rf.currentTerm {
-		// when term > rf.currentTerm, reset raft state
 		rf.currentTerm = term
 		rf.votedFor = -1
 		rf.state = Follower
@@ -150,6 +94,8 @@ func (rf *Raft) resetLeaderTimeout() {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	return rf.currentTerm, (rf.state == Leader)
 }
 
@@ -173,15 +119,20 @@ func (rf *Raft) persist(snapshot []byte) {
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
-	e.Encode(rf.lastIncludedIndex)
-	e.Encode(rf.lastIncludedTerm)
 	raftstate := w.Bytes()
-	// save raftstate and snapshot if not nil
+	// save raftstate and snapshot
 	rf.persister.Save(raftstate, snapshot)
 }
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
+	if data == nil || len(data) < 1 {
+		rf.currentTerm = 0
+		rf.votedFor = -1
+		rf.log = makeEmptyLog()
+		rf.lastIncludedIndex = 0
+		rf.lastIncludedTerm = -1
+	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// read raftstate from rf.persister
@@ -194,30 +145,16 @@ func (rf *Raft) readPersist(data []byte) {
 	var currentTerm int
 	var votedFor int
 	var log Log
-	var lastIncludedIndex int
-	var lastIncludeTerm int
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&log) != nil ||
-		d.Decode(&lastIncludedIndex) != nil ||
-		d.Decode(&lastIncludeTerm) != nil {
+		d.Decode(&log) != nil {
 		rf.logger.Error("rf.readPersist(): failed to read raftstate")
 		return
 	} else {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = log
-		rf.lastIncludedIndex = lastIncludedIndex
-		rf.lastIncludedTerm = lastIncludeTerm
 	}
-}
-
-// apply
-func (rf *Raft) apply() {
-	// 唤醒所有applyCond.Wait()的goroutine
-	rf.logger.Debug("rf.apply(): rf.applyCond.Broadcast(), rf.commitIndex=[%d]", rf.commitIndex)
-	// rf.applyCond.Broadcast()获得rf.mu
-	rf.applyCond.Broadcast()
 }
 
 // 用于向客户端apply的goroutine
@@ -225,25 +162,16 @@ func (rf *Raft) applier() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	for !rf.killed() {
-		if rf.commitIndex > rf.lastApplied && rf.log.lastIndex() > rf.lastApplied {
-			nextIndex := rf.lastApplied + 1
+		rf.applyCond.Wait()
+		rf.logger.Debug("applier(): rf=%+v", rf)
+		for rf.lastApplied+1 <= rf.commitIndex {
+			rf.lastApplied++
 			applyMsg := ApplyMsg{
 				CommandValid: true,
-				CommandIndex: nextIndex,
-				Command:      rf.log.index(nextIndex).Command,
+				CommandIndex: rf.lastApplied,
+				Command:      rf.log.index(rf.lastApplied).Command,
 			}
-			rf.logger.Info("rf.log=%v", rf.log)
-			rf.logger.Info(" -> [Client], want to apply command %+v", applyMsg)
-			rf.mu.Unlock()
-			rf.applyCh <- applyMsg // 可能阻塞，需要释放锁
-			rf.mu.Lock()
-			rf.logger.Info("apply command success")
-			rf.lastApplied++
-		} else {
-			rf.logger.Debug("rf.applyCond.Wait(), rf.commitIndex=[%d], rf.lastApplied=[%d]",
-				rf.commitIndex, rf.lastApplied)
-			// rf.applyCond.Wait()释放rf.mu
-			rf.applyCond.Wait()
+			rf.applyHelper.tryApply(applyMsg)
 		}
 	}
 }
@@ -272,17 +200,17 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		// not leader
 		return index, term, isLeader
 	}
-	index = rf.nextIndex[rf.me]
+	index = rf.log.lastIndex() + 1
 	rf.log.append(Entry{
 		Term:    rf.currentTerm,
 		Index:   index,
 		Command: command,
 	})
 	rf.matchIndex[rf.me] = index
-	rf.nextIndex[rf.me] = index + 1
+	// rf.nextIndex[rf.me] = index + 1
 	rf.persist(nil)
-	rf.logger.Info("<- [Client], receive command")
-	rf.logger.Info("after receive, rf.log=%v", rf.log)
+	rf.logger.Debug("receive command=%+v", command)
+	rf.logger.Debug("after receive, rf.log=%+v", rf.log)
 	// inform to send AppendEntries
 	rf.broadcastLog()
 	return index, term, isLeader
@@ -350,42 +278,32 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+
 	// debug
 	rf.logger = *debugutils.NewLogger(fmt.Sprintf("Raft %d", me), debugutils.Slient)
-	//
-	rf.currentTerm = 0
-	rf.votedFor = -1
-	rf.log = makeEmptyLog()
-	//
+
+	// initialize from state persisted before a crash
+	rf.readPersist(rf.persister.ReadRaftState())
+	// rf.currentTerm = 0
+	// rf.votedFor = -1
+	// rf.log = makeEmptyLog()
+	// rf.lastIncludedIndex = 0
+	// rf.lastIncludedTerm = -1
 	rf.commitIndex = 0
-	rf.lastApplied = 0
-	//
-	rf.nextIndex = make([]int, len(rf.peers))
-	rf.matchIndex = make([]int, len(rf.peers))
+	rf.lastApplied = rf.log.LastIncludedIndex // or rf.lastIncludedIndex ?
 	//
 	rf.state = Follower
 	rf.rand = rand.New(rand.NewSource(int64(rf.me)))
 	rf.resetLeaderTimeout()
 	//
-	rf.applyCh = applyCh
 	rf.applyCond = sync.NewCond(&rf.mu)
 	rf.newLogCome = sync.NewCond(&rf.mu)
-	//
-	rf.lastIncludedIndex = 0
-	rf.lastIncludedTerm = -1
-
-	// initialize from state persisted before a crash
-	rf.readPersist(rf.persister.ReadRaftState())
-
-	// set other states
-	rf.commitIndex = rf.lastIncludedIndex
-	rf.lastApplied = rf.lastIncludedIndex
+	rf.applyHelper = makeApplyHelper(rf.me, applyCh, rf.lastApplied)
 
 	rf.logger.Debug("success make rf=%v", rf)
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-
 	go rf.applier()
 
 	return rf
