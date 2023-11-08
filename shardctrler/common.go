@@ -1,5 +1,11 @@
 package shardctrler
 
+import (
+	"time"
+
+	"6.5840/debugutils"
+)
+
 //
 // Shard controler: assigns shards to replication groups.
 //
@@ -17,6 +23,15 @@ package shardctrler
 // You will need to add fields to the RPC argument structs.
 //
 
+// some configs
+const (
+	NoLeaderSleepTime = 100 * time.Millisecond
+	RequestWaitTime   = 100 * time.Millisecond
+	// default log level
+	ShardCtrlerDefaultLogLevel = debugutils.Slient
+	ClientDefaultLogLevel      = debugutils.Slient
+)
+
 // The number of shards.
 const NShards = 10
 
@@ -28,46 +43,72 @@ type Config struct {
 	Groups map[int][]string // gid -> servers[]
 }
 
+type OpType string
+
 const (
-	OK = "OK"
+	JoinOp  = "JoinOp"
+	LeaveOp = "LeaveOp"
+	MoveOp  = "MoveOp"
+	QueryOp = "QueryOp"
 )
 
+// Err
 type Err string
 
+const (
+	OK             = "OK"
+	ErrWrongLeader = "ErrWrongLeader"
+)
+
+// Base
+type BaseArgs struct {
+	ClientId int
+	SeqId    int
+}
+
+type BaseReply struct {
+	WrongLeader bool
+	Err         Err
+}
+
+// Join
 type JoinArgs struct {
-	Servers map[int][]string // new GID -> servers mappings
+	BaseArgs BaseArgs
+	Servers  map[int][]string // new GID -> servers mappings
 }
 
 type JoinReply struct {
-	WrongLeader bool
-	Err         Err
+	BaseReply BaseReply
 }
 
+// Leave
 type LeaveArgs struct {
-	GIDs []int
+	BaseArgs BaseArgs
+	GIDs     []int
 }
 
 type LeaveReply struct {
-	WrongLeader bool
-	Err         Err
+	BaseReply BaseReply
 }
 
+// Move
 type MoveArgs struct {
-	Shard int
-	GID   int
+	BaseArgs BaseArgs
+	Shard    int
+	GID      int
 }
 
 type MoveReply struct {
-	WrongLeader bool
-	Err         Err
+	BaseReply BaseReply
 }
 
+// Query
 type QueryArgs struct {
-	Num int // desired config number
+	BaseArgs BaseArgs
+	Num      int // desired config number
 }
 
 type QueryReply struct {
-	WrongLeader bool
-	Err         Err
-	Config      Config
+	BaseReply BaseReply
+	Config    Config
 }

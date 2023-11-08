@@ -13,7 +13,7 @@ import (
 	"6.5840/raft"
 )
 
-type Command struct {
+type Op struct {
 	ClientId int
 	SeqId    int
 	Type     OpType
@@ -80,7 +80,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	}
 	kv.logger.Debug("GetOp begin, args=%+v", args)
 	// 发送指令
-	cmd := Command{
+	cmd := Op{
 		ClientId: args.ClientId,
 		SeqId:    args.SeqId,
 		Type:     GetOp,
@@ -124,7 +124,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 	kv.logger.Debug("%s begin, args=%+v", args.Op, args)
 	// 发送指令
-	cmd := Command{
+	cmd := Op{
 		ClientId: args.ClientId,
 		SeqId:    args.SeqId,
 		Type:     args.Op,
@@ -201,9 +201,9 @@ func (kv *KVServer) applyMsgHandler() {
 		case msg.CommandValid:
 			// CommandValid
 			index := msg.CommandIndex
-			cmd, ok := msg.Command.(Command)
+			cmd, ok := msg.Command.(Op)
 			if !ok {
-				panic("ERROR: cannot tranvert msg.Command to Command")
+				panic("ERROR: cannot tranvert msg.Command to Op")
 			}
 			if !kv.ifDuplicate(cmd.ClientId, cmd.SeqId) {
 				kv.logger.Debug("not duplicate cmd=%+v", cmd)
@@ -289,7 +289,7 @@ func (kv *KVServer) readPersist(data []byte) {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Command{})
+	labgob.Register(Op{})
 
 	kv := new(KVServer)
 	kv.me = me

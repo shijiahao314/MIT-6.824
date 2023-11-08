@@ -37,7 +37,7 @@ var idMu sync.Mutex
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	// You'll have to add code here.
+	//
 	idMu.Lock()
 	ck.clientId = ID
 	ID++

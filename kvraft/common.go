@@ -9,9 +9,11 @@ import (
 
 // some configs
 const (
-	NoLeaderSleepTime   = 100 * time.Millisecond
-	RaftstateLoadFactor = 0.9 // kv.persister.RaftStateSize() should <= maxraftstate * RaftstateLoadFactor
-	RequestWaitTime     = 100 * time.Millisecond
+	// time
+	NoLeaderSleepTime = 100 * time.Millisecond
+	RequestWaitTime   = 100 * time.Millisecond
+	// kv.persister.RaftStateSize() should <= maxraftstate * RaftstateLoadFactor
+	RaftstateLoadFactor = 0.9
 	// default loglevel: Slient DebugLevel
 	ServerDefaultLogLevel = debugutils.Slient
 	ClientDefaultLogLevel = debugutils.Slient
