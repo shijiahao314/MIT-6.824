@@ -28,7 +28,7 @@ const (
 	NoLeaderSleepTime = 100 * time.Millisecond
 	RequestWaitTime   = 100 * time.Millisecond
 	// default log level
-	ShardCtrlerDefaultLogLevel = debugutils.Slient
+	ShardCtrlerDefaultLogLevel = debugutils.DebugLevel
 	ClientDefaultLogLevel      = debugutils.Slient
 )
 

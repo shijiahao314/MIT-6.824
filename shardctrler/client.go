@@ -24,8 +24,7 @@ type Clerk struct {
 }
 
 func (ck *Clerk) String() string {
-	return fmt.Sprintf("clientId=%d seqId=%d",
-		ck.clientId, ck.seqId)
+	return fmt.Sprintf("{clientId=%d seqId=%d}", ck.clientId, ck.seqId)
 }
 
 func nrand() int64 {

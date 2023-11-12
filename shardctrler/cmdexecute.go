@@ -27,30 +27,6 @@ func (sc *ShardCtrler) execQuery(op Op) Config {
 	return sc.configs[num]
 }
 
-// For Move
-func (sc *ShardCtrler) moveShared(Shard, GID int) {
-	// 获取旧配置
-	oldConfig := sc.configs[len(sc.configs)-1]
-	// 定义新配置
-	newConfig := Config{
-		Num: oldConfig.Num + 1,
-	}
-	// 分配新的Shards，要求尽量少移动
-	newShards := oldConfig.Shards
-	newShards[Shard] = GID
-	newConfig.Shards = newShards
-	// 分配新的Groups
-	newGroups := make(map[int][]string)
-	for _, gid := range newShards {
-		if _, exists := oldConfig.Groups[gid]; !exists {
-			newGroups[gid] = oldConfig.Groups[gid]
-		}
-	}
-	newConfig.Groups = newGroups
-	//
-	sc.configs = append(sc.configs, newConfig)
-}
-
 // For Join
 func (sc *ShardCtrler) rebalanceShardsForJoin(Servers map[int][]string) {
 	// Shards数量固定为NShards
@@ -142,6 +118,30 @@ func (sc *ShardCtrler) rebalanceShardsForLeave(GIDs []int) {
 		newShards = make([]int, NShards)
 	}
 	newConfig.Shards = [NShards]int(newShards)
+	//
+	sc.configs = append(sc.configs, newConfig)
+}
+
+// For Move
+func (sc *ShardCtrler) moveShared(Shard, GID int) {
+	// 获取旧配置
+	oldConfig := sc.configs[len(sc.configs)-1]
+	// 定义新配置
+	newConfig := Config{
+		Num: oldConfig.Num + 1,
+	}
+	// 分配新的Shards，要求尽量少移动
+	newShards := oldConfig.Shards
+	newShards[Shard] = GID
+	newConfig.Shards = newShards
+	// 分配新的Groups
+	newGroups := make(map[int][]string)
+	for _, gid := range newShards {
+		if _, exists := oldConfig.Groups[gid]; !exists {
+			newGroups[gid] = oldConfig.Groups[gid]
+		}
+	}
+	newConfig.Groups = newGroups
 	//
 	sc.configs = append(sc.configs, newConfig)
 }

@@ -12,7 +12,8 @@ import (
 )
 
 type Clerk struct {
-	servers  []*labrpc.ClientEnd
+	servers []*labrpc.ClientEnd
+	//
 	clientId int
 	seqId    int
 	leaderId int // 记录上一个可用的server
@@ -21,7 +22,7 @@ type Clerk struct {
 }
 
 func (ck *Clerk) String() string {
-	return fmt.Sprintf("{clientId=%d  seqId=%d leaderId=%d}", ck.clientId, ck.seqId, ck.leaderId)
+	return fmt.Sprintf("{clientId=%d seqId=%d leaderId=%d}", ck.clientId, ck.seqId, ck.leaderId)
 }
 
 func nrand() int64 {
