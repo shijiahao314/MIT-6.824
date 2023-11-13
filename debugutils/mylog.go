@@ -5,11 +5,11 @@ import (
 	"time"
 )
 
-// 默认日志等级
-const DEFAULT_LOG_LEVEL = Slient
-
-// 日志Buffer大小
-const MSG_CHAN_BUFFER_SIZE = 0
+const (
+	DEFAULT_LOG_LEVEL    = Slient // 默认日志等级
+	MSG_CHAN_BUFFER_SIZE = 0      // 日志Buffer大小
+	SHOW_TIMESTAPM       = false
+)
 
 var printMsgChan chan string
 
@@ -86,6 +86,9 @@ func (logger *Logger) Printf(format string, v ...any) {
 const timeFormat = "2006/01/02 15:04:05.000"
 
 func (logger *Logger) getPrefix() string {
+	if !SHOW_TIMESTAPM {
+		return fmt.Sprintf("[%s]: ", logger.name)
+	}
 	now := time.Now().Format(timeFormat)
 	return fmt.Sprintf("%s [%s]: ", now, logger.name)
 }

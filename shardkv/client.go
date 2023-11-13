@@ -82,7 +82,7 @@ func (ck *Clerk) Get(key string) string {
 		SeqId:    ck.seqId,
 		Key:      key,
 	}
-	ck.logger.Debug("key=[%s] GetArgs=%+v", key, args)
+	ck.logger.Debug("[%d][Get][begin], key=[%s]", args.SeqId, args.Key)
 	ck.seqId++
 	for {
 		shard := key2shard(key)
@@ -96,6 +96,7 @@ func (ck *Clerk) Get(key string) string {
 				if ok {
 					switch reply.Err {
 					case OK:
+						ck.logger.Debug("[%d][Get][end], reply.Value=[%s]", args.SeqId, reply.Value)
 						return reply.Value
 					case ErrWrongGroup:
 						break
@@ -109,14 +110,11 @@ func (ck *Clerk) Get(key string) string {
 		// ask controler for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}
-
-	return ""
 }
 
 // shared by Put and Append.
 // You will have to modify this function.
 func (ck *Clerk) PutAppend(key string, value string, op OpType) {
-
 	args := PutAppendArgs{
 		ClientId: ck.clientId,
 		SeqId:    ck.seqId,
@@ -124,29 +122,32 @@ func (ck *Clerk) PutAppend(key string, value string, op OpType) {
 		Value:    value,
 		Op:       op,
 	}
-	ck.logger.Debug("key=[%s] PutAppendArgs=%+v", key, args)
 	ck.seqId++
 	for {
-		shard := key2shard(key)
-		gid := ck.config.Shards[shard]
+		shardId := key2shard(key)
+		gid := ck.config.Shards[shardId]
+		ck.logger.Debug("[%d][%s][begin], key=[%s], value=[%s]", args.SeqId, args.Op, args.Key, args.Value)
+		ck.logger.Debug("ck.config=%+v", ck.config)
+		ck.logger.Debug("shardId=[%d], groupId=[%d]", shardId, gid)
 		if servers, ok := ck.config.Groups[gid]; ok {
+			// 遍历该Group的所有Server
 			for si := 0; si < len(servers); si++ {
+				ck.logger.Debug("->[%s]", servers[si])
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok {
-					switch reply.Err {
-					case OK:
+					if reply.Err == OK {
+						ck.logger.Debug("[%d][%s][OK]", args.SeqId, args.Op)
 						return
-					case ErrWrongGroup:
+					}
+					if reply.Err == ErrWrongGroup {
 						break
-					default:
-						continue
 					}
 				}
 			}
 		}
-		time.Sleep(NoLeaderSleepTime)
+		time.Sleep(WrongGroupWaitTime)
 		// ask controler for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}

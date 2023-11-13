@@ -135,9 +135,9 @@ func (sc *ShardCtrler) preCheck(args *BaseArgs, reply *BaseReply, op string, arg
 	}
 	var sb strings.Builder
 	for k, v := range argsMap {
-		sb.WriteString(fmt.Sprintf("[%s]=[%+v] ", k, v))
+		sb.WriteString(fmt.Sprintf("%s=%+v ", k, v))
 	}
-	sc.logger.Debug("receive %s RPC [%d]:[%d], argsMap=%s",
+	sc.logger.Debug("[RPC][begin][%s]<-[%d]:[%d], args={%s}",
 		op, args.ClientId, args.SeqId, sb.String())
 	return true
 }
@@ -147,7 +147,7 @@ func (sc *ShardCtrler) postCheck(args *BaseArgs, reply *BaseReply, op string) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	reply.Err = OK
-	sc.logger.Debug("finish %s RPC [%d]:[%d], reply=%+v", op, args.ClientId, args.SeqId, reply)
+	sc.logger.Debug("[RPC][end][%s]->[%d]:[%d], reply=%+v", op, args.ClientId, args.SeqId, reply)
 }
 
 func (sc *ShardCtrler) getWaitCh(index int) chan OpReply {

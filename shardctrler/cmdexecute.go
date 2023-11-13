@@ -6,10 +6,12 @@ import (
 
 func (sc *ShardCtrler) execJoin(op Op) {
 	sc.rebalanceShardsForJoin(op.Servers)
+	sc.logger.Debug("after join, sc.configs.last=%+v", sc.configs[len(sc.configs)-1])
 }
 
 func (sc *ShardCtrler) execLeave(op Op) {
 	sc.rebalanceShardsForLeave(op.GIDs)
+	sc.logger.Debug("after leave, sc.configs.last=%+v", sc.configs[len(sc.configs)-1])
 }
 
 func (sc *ShardCtrler) execMove(op Op) {
@@ -17,11 +19,13 @@ func (sc *ShardCtrler) execMove(op Op) {
 		return
 	}
 	sc.moveShared(op.Shard, op.GID)
+	sc.logger.Debug("after move, sc.configs.last=%+v", sc.configs[len(sc.configs)-1])
 }
 
 func (sc *ShardCtrler) execQuery(op Op) Config {
 	num := op.Num
-	if num == -1 {
+	if num == -1 || num >= len(sc.configs) {
+		// 获取最新或者越界？
 		return sc.configs[len(sc.configs)-1]
 	}
 	return sc.configs[num]

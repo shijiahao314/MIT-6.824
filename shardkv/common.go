@@ -17,12 +17,23 @@ import (
 
 // some configs
 const (
-	ShardKVDefaultLogLevel = debugutils.DebugLevel
-	ClientDefaultLogLevel  = debugutils.DebugLevel
+	ShardKVDefaultLogLevel = debugutils.Slient
+	ClientDefaultLogLevel  = debugutils.Slient
 	//
-	NoLeaderSleepTime = 100 * time.Millisecond
-	RequestWaitTime   = 100 * time.Millisecond
+	NoLeaderSleepTime  = 100 * time.Millisecond
+	RequestWaitTime    = 100 * time.Millisecond
+	WrongGroupWaitTime = 100 * time.Millisecond
+	//
+	UpConfigLoopInterval = 100 * time.Millisecond
+	//
+	GetTimeout         = 500 * time.Millisecond
+	PutAppendTimeout   = 500 * time.Millisecond
+	UpConfigTimeout    = 500 * time.Millisecond
+	AddShardTimeout    = 500 * time.Millisecond
+	RemoveShardTimeout = 500 * time.Millisecond
 )
+
+type Err string
 
 const (
 	OK                  = "OK"
@@ -30,19 +41,22 @@ const (
 	ErrWrongGroup       = "ErrWrongGroup"
 	ErrWrongLeader      = "ErrWrongLeader"
 	ShardNotArrive      = "ShardNotArrive" // 分片还未到达
+	ConfigNotArrive     = "ConfigNotArrive"
 	ErrInconsistentData = "ErrInconsistentData"
 	ErrRequestTimeOut   = "ErrRequestTimeOut" // request timeout
-)
 
-type Err string
+)
 
 // OpType
 type OpType string
 
 const (
-	GetOp        = "GetOp"
-	PutOp        = "PutOp"
-	AppendOp     = "AppendOp"
+	GetOp    = "GetOp"
+	PutOp    = "PutOp"
+	AppendOp = "AppendOp"
+	//
+	AddShard     = "AddShard"
+	RemoveShard  = "RemoveShard"
 	UpdateConfig = "UpdateConfig"
 )
 
@@ -74,4 +88,17 @@ type CommandReply struct {
 	ClientId int64
 	SeqId    int
 	Err      Err
+}
+
+// ShardKV向对应ShardCtrler发送拉取配置文件请求以及回复
+type AddShardArgs struct {
+	GroupId     int
+	ShardId     int
+	Shard       Shard
+	LastApplied map[int64]int
+	ConfigNum   int
+}
+
+type AddShardReply struct {
+	Err Err
 }
