@@ -1,6 +1,7 @@
 package shardkv
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -47,7 +48,8 @@ type ShardKV struct {
 	//
 	dead int32
 	//
-	mck *shardctrler.Clerk
+	mck       *shardctrler.Clerk
+	persister *raft.Persister
 	//
 	seqMap  map[int64]int             // mck.clientId -> mck.seqId
 	chanMap map[int]chan CommandReply // index -> chan CommandReply
@@ -276,11 +278,15 @@ func (kv *ShardKV) applyMsgHandler() {
 							kv.shards[shardId].KvMap[cmd.Key] += cmd.Value
 							kv.logger.Debug("after append, kv.shards[%d]=%+v", shardId, kv.shards[shardId])
 						default:
+							fmt.Printf("cmd=%+v", cmd)
 							panic("Unknown cmd.Type")
 						}
+						if kv.maxraftstate != -1 &&
+							float32(kv.persister.RaftStateSize()) > float32(kv.maxraftstate)*RaftstateLoadFactor {
+							// need snapshot
+							kv.makeSnapshot(index)
+						}
 						kv.mu.Unlock()
-					} else {
-						kv.logger.Debug("is duplicate cmd=%+v", cmd)
 					}
 				}
 			case AddShard:
@@ -302,11 +308,54 @@ func (kv *ShardKV) applyMsgHandler() {
 				kv.getWaitCh(index) <- reply
 			}
 		case msg.SnapshotValid:
-			// kv.readPersist(msg.Snapshot)
+			kv.readPersist(msg.Snapshot)
 		default:
 			fmt.Printf("msg=%+v\n", msg)
 			panic("Unknown msg type")
 		}
+	}
+}
+
+// make Snapshot
+func (kv *ShardKV) makeSnapshot(index int) {
+	// 本方法不加锁，建议调用该方法时持有锁
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.shards)
+	e.Encode(kv.seqMap)
+	e.Encode(kv.maxraftstate)
+	e.Encode(kv.config)
+	e.Encode(kv.lastConfig)
+	data := w.Bytes()
+	kv.rf.Snapshot(index, data)
+}
+
+// read persist
+func (kv *ShardKV) readPersist(data []byte) {
+	if data == nil || len(data) < 1 {
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var shards []Shard
+	var seqMap map[int64]int
+	var maxraftstate int
+	var config shardctrler.Config
+	var lastConfig shardctrler.Config
+	if d.Decode(&shards) != nil ||
+		d.Decode(&seqMap) != nil ||
+		d.Decode(&maxraftstate) != nil ||
+		d.Decode(&config) != nil ||
+		d.Decode(&lastConfig) != nil {
+		kv.logger.Error("cannot readPersist")
+	} else {
+		kv.mu.Lock()
+		kv.shards = shards
+		kv.seqMap = seqMap
+		kv.maxraftstate = maxraftstate
+		kv.config = config
+		kv.lastConfig = lastConfig
+		kv.mu.Unlock()
 	}
 }
 
@@ -419,7 +468,7 @@ func (kv *ShardKV) configDetector() {
 				if gid == kv.gid &&
 					kv.config.Shards[shardId] != kv.gid &&
 					kv.shards[shardId].ConfigNum < kv.config.Num {
-					// 该分片不属于自己
+					// 该分片不属于自己，那么就发送给该属于的ShardKV
 					shard := kv.cloneShard(kv.config.Num, kv.shards[shardId].KvMap)
 					args := AddShardArgs{
 						GroupId:     gid,
@@ -441,18 +490,17 @@ func (kv *ShardKV) configDetector() {
 					go func(servers []*labrpc.ClientEnd, args *AddShardArgs) {
 						for i := 0; ; i++ {
 							reply := AddShardReply{}
-							// ***bug: 对自己同组进行AddShard
 							ok := servers[i%len(servers)].Call("ShardKV.AddShard", args, &reply)
 							if ok {
 								switch reply.Err {
 								case OK:
-									// 成功则删除自己的分片
+									// 发送成功则删除自己的分片
 									kv.startCommand(Op{
 										ClientId: int64(kv.gid),
 										SeqId:    kv.config.Num,
 										Type:     RemoveShard,
 										ShardId:  args.ShardId,
-									}, RemoveShardTimeout)
+									}, RemoveShardTimeout) // 为什么不怕这步失败？
 									return // 退出
 								}
 							}
@@ -571,11 +619,15 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	// Use something like this to talk to the shardctrler:
 	kv.mck = shardctrler.MakeClerk(kv.ctrlers)
+	kv.persister = persister
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	kv.logger = *debugutils.NewLogger(fmt.Sprintf("ShardKV %d-%d", kv.gid, kv.me), ShardKVDefaultLogLevel)
+
+	kv.readPersist(persister.ReadSnapshot())
+
 	kv.logger.Debug("success make ShardKV=%+v", kv)
 
 	//

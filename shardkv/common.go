@@ -31,6 +31,8 @@ const (
 	UpConfigTimeout    = 500 * time.Millisecond
 	AddShardTimeout    = 500 * time.Millisecond
 	RemoveShardTimeout = 500 * time.Millisecond
+	//
+	RaftstateLoadFactor = 0.9
 )
 
 type Err string
