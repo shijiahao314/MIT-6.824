@@ -9,34 +9,13 @@ package shardkv
 //
 
 import (
-	"crypto/rand"
 	"fmt"
-	"math/big"
 	"time"
 
 	"6.5840/debugutils"
 	"6.5840/labrpc"
 	"6.5840/shardctrler"
 )
-
-// which shard is a key in?
-// please use this function,
-// and please do not change it.
-func key2shard(key string) int {
-	shard := 0
-	if len(key) > 0 {
-		shard = int(key[0])
-	}
-	shard %= shardctrler.NShards
-	return shard
-}
-
-func nrand() int64 {
-	max := big.NewInt(int64(1) << 62)
-	bigx, _ := rand.Int(rand.Reader, max)
-	x := bigx.Int64()
-	return x
-}
 
 type Clerk struct {
 	sm       *shardctrler.Clerk
@@ -75,71 +54,30 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // fetch the current value for a key.
 // returns "" if the key does not exist.
 // keeps trying forever in the face of all other errors.
-// You will have to modify this function.
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{
 		ClientId: ck.clientId,
 		SeqId:    ck.seqId,
 		Key:      key,
 	}
-	ck.logger.Debug("[%d][Get][begin], key=[%s]", args.SeqId, args.Key)
-	ck.seqId++
-	for {
-		shard := key2shard(key)
-		gid := ck.config.Shards[shard]
-		if servers, ok := ck.config.Groups[gid]; ok {
-			// try each server for the shard.
-			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
-				var reply GetReply
-				ok := srv.Call("ShardKV.Get", &args, &reply)
-				if ok {
-					switch reply.Err {
-					case OK:
-						ck.logger.Debug("[%d][Get][end], reply.Value=[%s]", args.SeqId, reply.Value)
-						return reply.Value
-					case ErrWrongGroup:
-						break
-					default:
-						continue
-					}
-				}
-			}
-		}
-		time.Sleep(NoLeaderSleepTime)
-		// ask controler for the latest configuration.
-		ck.config = ck.sm.Query(-1)
-	}
-}
-
-// shared by Put and Append.
-// You will have to modify this function.
-func (ck *Clerk) PutAppend(key string, value string, op OpType) {
-	args := PutAppendArgs{
-		ClientId: ck.clientId,
-		SeqId:    ck.seqId,
-		Key:      key,
-		Value:    value,
-		Op:       op,
-	}
 	ck.seqId++
 	for {
 		shardId := key2shard(key)
 		gid := ck.config.Shards[shardId]
-		ck.logger.Debug("[%d][%s][begin], key=[%s], value=[%s]", args.SeqId, args.Op, args.Key, args.Value)
+		ck.logger.Debug("[%d][Get][begin], key=[%s]", args.SeqId, args.Key)
 		ck.logger.Debug("ck.config=%+v", ck.config)
 		ck.logger.Debug("shardId=[%d], groupId=[%d]", shardId, gid)
 		if servers, ok := ck.config.Groups[gid]; ok {
-			// 遍历该Group的所有Server
+			// try each server for the shard.
 			for si := 0; si < len(servers); si++ {
 				ck.logger.Debug("->[%s]", servers[si])
 				srv := ck.make_end(servers[si])
-				var reply PutAppendReply
-				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				var reply GetReply
+				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok {
 					if reply.Err == OK {
-						ck.logger.Debug("[%d][%s][OK]", args.SeqId, args.Op)
-						return
+						ck.logger.Debug("[%d][Get][end], reply.Value=[%s]", args.SeqId, reply.Value)
+						return reply.Value
 					}
 					if reply.Err == ErrWrongGroup {
 						break
@@ -158,4 +96,44 @@ func (ck *Clerk) Put(key string, value string) {
 }
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, AppendOp)
+}
+
+// shared by Put and Append.
+func (ck *Clerk) PutAppend(key string, value string, op OpType) {
+	args := PutAppendArgs{
+		ClientId: ck.clientId,
+		SeqId:    ck.seqId,
+		Key:      key,
+		Value:    value,
+		Type:     op,
+	}
+	ck.seqId++
+	for {
+		shardId := key2shard(key)
+		gid := ck.config.Shards[shardId]
+		ck.logger.Debug("[%d][%s][begin], key=[%s], value=[%s]", args.SeqId, args.Type, args.Key, args.Value)
+		ck.logger.Debug("ck.config=%+v", ck.config)
+		ck.logger.Debug("shardId=[%d], groupId=[%d]", shardId, gid)
+		if servers, ok := ck.config.Groups[gid]; ok {
+			// try each server for the shard.
+			for si := 0; si < len(servers); si++ {
+				ck.logger.Debug("->[%s]", servers[si])
+				srv := ck.make_end(servers[si])
+				var reply PutAppendReply
+				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
+				if ok {
+					if reply.Err == OK {
+						ck.logger.Debug("[%d][%s][OK]", args.SeqId, args.Type)
+						return
+					}
+					if reply.Err == ErrWrongGroup {
+						break
+					}
+				}
+			}
+		}
+		time.Sleep(WrongGroupWaitTime)
+		// ask controler for the latest configuration.
+		ck.config = ck.sm.Query(-1)
+	}
 }

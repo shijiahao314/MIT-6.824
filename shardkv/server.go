@@ -3,6 +3,7 @@ package shardkv
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,20 +19,54 @@ type Op struct {
 	ClientId int64
 	SeqId    int
 	Type     OpType
-	Key      string
-	Value    string
-	// for AddShard
-	Shard  Shard
-	SeqMap map[int64]int // clientId -> seqId
-	// for RemoveShard
-	ShardId int
-	// for UpConfigType
-	UpConfig shardctrler.Config
+	Key      string             // for: GetOp, PutOp
+	Value    string             // for: PutOp
+	ShardId  int                // for: AddShard, RemoveShard, UpdateConfig
+	Shard    Shard              // for: AddShard
+	SeqMap   map[int64]int      // for: AddShard
+	UpConfig shardctrler.Config // for: UpdateConfig
+}
+
+func (op Op) String() string {
+	var sb strings.Builder
+	sb.WriteString("{")
+	sb.WriteString(fmt.Sprintf("ClientId:%d ", op.ClientId))
+	sb.WriteString(fmt.Sprintf("SeqId:%d ", op.SeqId))
+	sb.WriteString(fmt.Sprintf("Type:%s ", op.Type))
+	switch op.Type {
+	case GetOp:
+		sb.WriteString(fmt.Sprintf("Key:%s", op.Key))
+	case PutOp:
+		sb.WriteString(fmt.Sprintf("Key:%s ", op.Key))
+		sb.WriteString(fmt.Sprintf("Value:%s", op.Value))
+	case AddShard:
+		sb.WriteString(fmt.Sprintf("ShardId:%d ", op.ShardId))
+		sb.WriteString(fmt.Sprintf("Shard:%+v ", op.Shard))
+		sb.WriteString(fmt.Sprintf("SeqMap:%+v", op.SeqMap))
+	case RemoveShard:
+		sb.WriteString(fmt.Sprintf("ShardId:%d", op.ShardId))
+	case UpdateConfig:
+		sb.WriteString(fmt.Sprintf("ShardId:%d ", op.ShardId))
+		sb.WriteString(fmt.Sprintf("UpConfig:%+v", op.UpConfig))
+	}
+	sb.WriteString("}")
+	return sb.String()
 }
 
 type Shard struct {
 	ConfigNum int
 	KvMap     map[string]string
+}
+
+func (sd Shard) String() string {
+	var KvMap_str strings.Builder
+	for k, v := range sd.KvMap {
+		if len(v) > 6 {
+			v = v[0:2] + ".." + v[len(v)-2:]
+		}
+		KvMap_str.WriteString(k + ":" + v + " ")
+	}
+	return fmt.Sprintf("{ConfigNum:%d KvMap:[%s]}", sd.ConfigNum, KvMap_str.String())
 }
 
 type ShardKV struct {
@@ -60,7 +95,7 @@ type ShardKV struct {
 }
 
 func (kv *ShardKV) String() string {
-	return fmt.Sprintf("{me=%d gid=%d}", kv.me, kv.gid)
+	return fmt.Sprintf("{me=%d gid=%d maxraftsize=%d}", kv.me, kv.gid, kv.maxraftstate)
 }
 
 // call rf.Start to apply a command
@@ -143,12 +178,12 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 // ShardKV receive Put or Append RPC from Clerk
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.logger.Debug("[%s][begin]<-[%d]:[%d], k:v=[%s]:[%s]",
-		args.Op, args.ClientId, args.SeqId, args.Key, args.Value)
+		args.Type, args.ClientId, args.SeqId, args.Key, args.Value)
 	defer func() {
 		// defer语句在声明时就会记录相关变量的值，而不是在实际执行时获取
 		// 使用func包一层即可
 		kv.logger.Debug("[%s][end]->[%d]:[%d], reply=%+v",
-			args.Op, args.ClientId, args.SeqId, reply)
+			args.Type, args.ClientId, args.SeqId, reply)
 	}()
 	// 判断Shard
 	// 根据Key分片
@@ -180,7 +215,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err = kv.startCommand(Op{
 		ClientId: args.ClientId,
 		SeqId:    args.SeqId,
-		Type:     args.Op,
+		Type:     args.Type,
 		Key:      args.Key,
 		Value:    args.Value,
 	}, PutAppendTimeout)
@@ -201,8 +236,7 @@ func (kv *ShardKV) AddShard(args *AddShardArgs, reply *AddShardReply) {
 
 // 判断是否是重复的
 func (kv *ShardKV) ifDuplicate(clientId int64, seqId int) bool {
-	kv.mu.Lock()
-	defer kv.mu.Unlock()
+	// 本方法不加锁，建议调用该方法时持有锁
 	lastSeqId, exists := kv.seqMap[clientId]
 	if !exists {
 		return false
@@ -252,8 +286,10 @@ func (kv *ShardKV) applyMsgHandler() {
 				SeqId:    cmd.SeqId,
 				Err:      OK, // set default reply.Err OK
 			}
+			kv.mu.Lock()
 			switch cmd.Type {
 			case GetOp, PutOp, AppendOp:
+
 				// 先判断
 				if kv.config.Shards[shardId] != kv.gid {
 					// 不是对应Group
@@ -266,7 +302,6 @@ func (kv *ShardKV) applyMsgHandler() {
 					if !kv.ifDuplicate(cmd.ClientId, cmd.SeqId) {
 						kv.logger.Debug("not duplicate cmd=%+v", cmd)
 						// 不是重复的指令
-						kv.mu.Lock()
 						kv.seqMap[cmd.ClientId] = cmd.SeqId
 						switch cmd.Type {
 						case GetOp:
@@ -281,14 +316,9 @@ func (kv *ShardKV) applyMsgHandler() {
 							fmt.Printf("cmd=%+v", cmd)
 							panic("Unknown cmd.Type")
 						}
-						if kv.maxraftstate != -1 &&
-							float32(kv.persister.RaftStateSize()) > float32(kv.maxraftstate)*RaftstateLoadFactor {
-							// need snapshot
-							kv.makeSnapshot(index)
-						}
-						kv.mu.Unlock()
 					}
 				}
+
 			case AddShard:
 				if kv.config.Num < cmd.SeqId {
 					reply.Err = ConfigNotArrive
@@ -300,8 +330,16 @@ func (kv *ShardKV) applyMsgHandler() {
 			case UpdateConfig:
 				kv.updateShardHandler(cmd)
 			default:
+				fmt.Printf("cmd=%+v", cmd)
 				panic("Unknown cmd.Type")
 			}
+			if kv.maxraftstate != -1 &&
+				float32(kv.persister.RaftStateSize()) > float32(kv.maxraftstate)*RaftstateLoadFactor {
+				// need snapshot
+				kv.logger.Debug("kv.persister.RaftStateSize()=%d, ", kv.persister.RaftStateSize())
+				kv.makeSnapshot(index)
+			}
+			kv.mu.Unlock()
 			// 发送消息（考虑中途变更leader情况）
 			if _, isLeader := kv.rf.GetState(); isLeader {
 				kv.logger.Debug("is leader, send to chan[%d], reply=%+v", index, reply)
@@ -408,7 +446,6 @@ func (kv *ShardKV) updateShardHandler(cmd Op) {
 	kv.logger.Debug("kv.config=%+v", kv.config)
 	kv.logger.Debug("after UpdateShard, kv.shards[%d]=%+v",
 		cmd.ShardId, kv.shards[cmd.ShardId])
-
 }
 
 // 判断kv不属于自己的Shard是否全部发送完毕
@@ -484,7 +521,7 @@ func (kv *ShardKV) configDetector() {
 						// server name -> server
 						servers[i] = kv.make_end(name)
 					}
-					kv.logger.Debug("kv.shards[shardId].KvMap=%+v", kv.shards[shardId].KvMap)
+					// kv.logger.Debug("kv.shards[shardId].KvMap=%+v", kv.shards[shardId].KvMap)
 					kv.logger.Debug("->[%d], trySendAddShard RPC args=%+v", gid, args)
 					// 对gid组的所有ShardKV发送这个自己不需要的分片
 					go func(servers []*labrpc.ClientEnd, args *AddShardArgs) {
@@ -530,8 +567,10 @@ func (kv *ShardKV) configDetector() {
 			kv.logger.Debug("kv.lastConfig=%+v", kv.lastConfig)
 			kv.logger.Debug("kv.config=%+v", kv.config)
 			for shardId, shard := range kv.shards {
-				kv.logger.Debug("kv.shards[%d]=%+v, nil?%t",
-					shardId, shard, shard.KvMap == nil)
+				if shard.KvMap == nil {
+					continue
+				}
+				kv.logger.Debug("kv.shards[%d]=%+v", shardId, shard)
 			}
 			kv.logger.Debug("--------------------------------------------------")
 			if newConfig.Num != curConfig.Num+1 {
@@ -544,7 +583,7 @@ func (kv *ShardKV) configDetector() {
 				SeqId:    newConfig.Num, // configNum
 				Type:     UpdateConfig,  // UpdateConfig
 				UpConfig: newConfig,     // Config
-			}, UpConfigTimeout)
+			}, UpdateConfigTimeout)
 		}
 	}
 }

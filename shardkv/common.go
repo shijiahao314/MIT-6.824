@@ -1,6 +1,7 @@
 package shardkv
 
 import (
+	"fmt"
 	"time"
 
 	"6.5840/debugutils"
@@ -17,21 +18,21 @@ import (
 
 // some configs
 const (
+	// log level
 	ShardKVDefaultLogLevel = debugutils.Slient
 	ClientDefaultLogLevel  = debugutils.Slient
-	//
-	NoLeaderSleepTime  = 100 * time.Millisecond
+	// Client wait time
 	RequestWaitTime    = 100 * time.Millisecond
 	WrongGroupWaitTime = 100 * time.Millisecond
-	//
+	// Server config detector time interval
 	UpConfigLoopInterval = 100 * time.Millisecond
-	//
-	GetTimeout         = 500 * time.Millisecond
-	PutAppendTimeout   = 500 * time.Millisecond
-	UpConfigTimeout    = 500 * time.Millisecond
-	AddShardTimeout    = 500 * time.Millisecond
-	RemoveShardTimeout = 500 * time.Millisecond
-	//
+	// Server some timeout
+	GetTimeout          = 500 * time.Millisecond
+	PutAppendTimeout    = 500 * time.Millisecond
+	AddShardTimeout     = 500 * time.Millisecond
+	RemoveShardTimeout  = 500 * time.Millisecond
+	UpdateConfigTimeout = 500 * time.Millisecond
+	// Server raftstate load factor
 	RaftstateLoadFactor = 0.9
 )
 
@@ -66,9 +67,22 @@ const (
 type PutAppendArgs struct {
 	ClientId int64
 	SeqId    int
-	Op       OpType // "Put" or "Append"
+	Type     OpType // "Put" or "Append"
 	Key      string
 	Value    string
+}
+
+func (args *PutAppendArgs) String() string {
+	key_str := args.Key
+	if len(key_str) > 6 {
+		key_str = key_str[:2] + ".." + key_str[len(key_str)-2:]
+	}
+	value_str := args.Value
+	if len(value_str) > 6 {
+		value_str = value_str[:2] + ".." + value_str[len(value_str)-2:]
+	}
+	return fmt.Sprintf("{ClientId:%d SeqId:%d Type:%s Key:%s Value:%s}",
+		args.ClientId, args.SeqId, args.Type, key_str, value_str)
 }
 
 type PutAppendReply struct {
@@ -81,9 +95,26 @@ type GetArgs struct {
 	Key      string
 }
 
+func (args *GetArgs) String() string {
+	key_str := args.Key
+	if len(key_str) > 6 {
+		key_str = key_str[:2] + ".." + key_str[len(key_str)-2:]
+	}
+	return fmt.Sprintf("{ClientId:%d SeqId:%d Key:%s}",
+		args.ClientId, args.SeqId, key_str)
+}
+
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+func (reply *GetReply) String() string {
+	value_str := reply.Value
+	if len(value_str) > 6 {
+		value_str = value_str[:2] + ".." + value_str[len(value_str)-2:]
+	}
+	return fmt.Sprintf("{Err:%s Value:%s}", reply.Err, value_str)
 }
 
 type CommandReply struct {
