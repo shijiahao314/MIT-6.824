@@ -234,7 +234,6 @@ func (rf *Raft) broadcastLog() {
 // should call killed() to check whether it should stop.
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
 	rf.applyHelper.Kill()
 }
 
