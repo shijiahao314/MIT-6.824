@@ -71,7 +71,8 @@ func (sc *ShardCtrler) ifDuplicate(clientId, seqId int) bool {
 func (sc *ShardCtrler) closeAndDelete(index int) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	close(sc.chanMap[index]) // chan应该仅由发送方关闭（*）
+	// 为避免panic: send on closed channel，不手动关闭通道
+	// close(sc.chanMap[index]) // chan应该仅由发送方关闭（*）
 	delete(sc.chanMap, index)
 }
 
