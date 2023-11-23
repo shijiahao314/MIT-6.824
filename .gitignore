@@ -6,5 +6,6 @@ mr-out-*
 mr-tmp-*
 *.log
 *.so
+*.
 
 !/logs/*.log
