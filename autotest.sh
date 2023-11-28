@@ -3,8 +3,8 @@ cd ./mapreduce/main
 bash test-mr.sh > ../../logs/mapreduce.log 2>&1
 cd ../../
 
-cd ./shardkv
 # test shardkv
+cd ./shardkv
 if [ -f ../logs/shardkv.log ]; then
     echo "文件存在"
     rm ../logs/shardkv.log
