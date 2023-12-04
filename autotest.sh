@@ -6,7 +6,7 @@ raft_log="$logs_dir/raft"
 kvraft_log="$logs_dir/kvraft"
 shardkv_log="$logs_dir/shardkv"
 # lab 2/3/4 测试次数
-test_n=1
+test_n=100
 
 # # 1.mapreduce
 # cd "$absolute_path/mapreduce/main"
@@ -56,7 +56,6 @@ lab_test() {
 }
 
 # 2.raft
-
 lab_test "${absolute_path}/raft" $raft_log $test_n
 
 # 3.kvraft
